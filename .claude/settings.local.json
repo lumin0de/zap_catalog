@@ -1,0 +1,29 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(dir:*)",
+      "WebFetch(domain:docs.uazapi.com)",
+      "WebSearch",
+      "WebFetch(domain:ui.shadcn.com)",
+      "WebFetch(domain:supabase.com)",
+      "WebFetch(domain:www.postman.com)",
+      "Bash(npm create:*)",
+      "Bash(npm install)",
+      "Bash(npm install:*)",
+      "Bash(npx shadcn@latest init:*)",
+      "Bash(npx shadcn@latest add:*)",
+      "Bash(npx tsc:*)",
+      "Bash(npm run build:*)",
+      "Bash(timeout 8 npm run dev:*)",
+      "Bash(wc:*)",
+      "Bash(npx supabase functions deploy:*)",
+      "Bash(npx supabase secrets list:*)",
+      "Bash(curl:*)",
+      "Bash(npx supabase functions log:*)",
+      "Bash(npx supabase:*)",
+      "Bash(python3:*)",
+      "Bash(python:*)"
+    ],
+    "defaultMode": "acceptEdits"
+  }
+}

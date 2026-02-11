@@ -1,0 +1,31 @@
+# Ambiente
+.env
+.env.*
+
+# Credenciais
+credentials.json
+token.json
+
+# Intermediários
+.tmp/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Frontend
+frontend/node_modules/
+frontend/dist/
+
+# OS
+Thumbs.db
+.DS_Store
