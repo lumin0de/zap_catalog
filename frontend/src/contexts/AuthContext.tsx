@@ -53,17 +53,33 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     loadingRef.current = true
 
     try {
-      const [profileRes, integrationsRes] = await Promise.all([
+      // Use allSettled so partial failures don't discard successful results
+      const [profileResult, integrationsResult] = await Promise.allSettled([
         callEdgeFunction<{ profile: Profile }>("get-profile"),
         callEdgeFunction<{ whatsapp: WhatsAppIntegration | null; meli: MeliIntegration | null }>(
           "get-integrations",
         ),
       ])
+
+      const profile =
+        profileResult.status === "fulfilled" ? profileResult.value.profile : null
+      const whatsapp =
+        integrationsResult.status === "fulfilled" ? integrationsResult.value.whatsapp : null
+      const meli =
+        integrationsResult.status === "fulfilled" ? integrationsResult.value.meli : null
+
+      if (profileResult.status === "rejected") {
+        console.error("[AuthContext] get-profile failed:", profileResult.reason)
+      }
+      if (integrationsResult.status === "rejected") {
+        console.error("[AuthContext] get-integrations failed:", integrationsResult.reason)
+      }
+
       setState((prev) => ({
         ...prev,
-        profile: profileRes.profile,
-        whatsapp: integrationsRes.whatsapp,
-        meli: integrationsRes.meli,
+        profile: profile ?? prev.profile,
+        whatsapp: whatsapp ?? prev.whatsapp,
+        meli: meli ?? prev.meli,
         loading: false,
         initialized: true,
       }))
