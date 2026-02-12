@@ -60,10 +60,7 @@ export default function AgentWizardPage() {
         />
       )}
       {currentStep === 4 && createdAgent && (
-        <StepCelebration
-          agentName={createdAgent.name}
-          agentId={createdAgent.id}
-        />
+        <StepCelebration agentName={createdAgent.name} />
       )}
     </WizardLayout>
   )

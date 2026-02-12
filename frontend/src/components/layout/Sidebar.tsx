@@ -5,7 +5,7 @@ import { Logo } from "@/components/common/Logo"
 
 const navItems = [
   { to: "/app", label: "Dashboard", icon: LayoutDashboard, end: true },
-  { to: "/app/agent/new", label: "Agente IA", icon: Bot, end: false },
+  { to: "/app/agent", label: "Agente IA", icon: Bot, end: false },
   { to: "/app/settings", label: "Configurações", icon: Settings, end: false },
 ]
 

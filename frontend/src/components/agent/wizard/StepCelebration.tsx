@@ -6,7 +6,6 @@ import { cn } from "@/lib/utils"
 
 interface StepCelebrationProps {
   agentName: string
-  agentId: string
 }
 
 const actions = [
@@ -15,25 +14,25 @@ const actions = [
     description: "Ensine seu agente com conteudos personalizados",
     icon: GraduationCap,
     color: "bg-purple-100 text-purple-600",
-    getPath: (id: string) => `/app/agent/${id}?tab=treinamentos`,
+    path: "/app/agent?tab=treinamentos",
   },
   {
     label: "Conectar canais",
     description: "Conecte o WhatsApp para comecar a atender",
     icon: MessageSquare,
     color: "bg-green-100 text-green-600",
-    getPath: () => "/app/settings",
+    path: "/app/settings",
   },
   {
     label: "Ajustar configuracoes",
     description: "Personalize o comportamento do agente",
     icon: Settings,
     color: "bg-orange-100 text-orange-600",
-    getPath: (id: string) => `/app/agent/${id}?tab=configuracoes`,
+    path: "/app/agent?tab=configuracoes",
   },
 ]
 
-export function StepCelebration({ agentName, agentId }: StepCelebrationProps) {
+export function StepCelebration({ agentName }: StepCelebrationProps) {
   const navigate = useNavigate()
 
   useEffect(() => {
@@ -90,7 +89,7 @@ export function StepCelebration({ agentName, agentId }: StepCelebrationProps) {
             <button
               key={action.label}
               type="button"
-              onClick={() => navigate(action.getPath(agentId))}
+              onClick={() => navigate(action.path)}
               className={cn(
                 "flex w-full items-center gap-4 rounded-xl border p-4 text-left transition-all duration-200",
                 "hover:border-primary/40 hover:shadow-sm cursor-pointer",

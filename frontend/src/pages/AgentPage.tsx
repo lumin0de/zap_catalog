@@ -1,5 +1,5 @@
-import { useState, useEffect } from "react"
-import { useParams, useSearchParams } from "react-router"
+import { useState, useEffect, useCallback } from "react"
+import { useNavigate, useSearchParams } from "react-router"
 import { Loader2 } from "lucide-react"
 import {
   Tabs,
@@ -13,34 +13,34 @@ import { AgentTraining } from "@/components/agent/detail/AgentTraining"
 import { AgentSettings } from "@/components/agent/detail/AgentSettings"
 import type { Agent } from "@/types/agent"
 
-export default function AgentDetailPage() {
-  const { id } = useParams<{ id: string }>()
+export default function AgentPage() {
+  const navigate = useNavigate()
   const [searchParams, setSearchParams] = useSearchParams()
   const [agent, setAgent] = useState<Agent | null>(null)
   const [loading, setLoading] = useState(true)
-  const [error, setError] = useState<string | null>(null)
 
   const activeTab = searchParams.get("tab") || "perfil"
 
-  useEffect(() => {
-    if (!id) return
-
-    const load = async () => {
-      try {
-        const res = await callEdgeFunction<{ agent: Agent }>("get-agent", {
-          agentId: id,
-        })
-        setAgent(res.agent)
-      } catch (err) {
-        setError(
-          err instanceof Error ? err.message : "Erro ao carregar agente",
-        )
-      } finally {
-        setLoading(false)
+  const loadAgent = useCallback(async () => {
+    try {
+      const res = await callEdgeFunction<{ agents: Agent[] }>("list-agents")
+      if (res.agents.length > 0) {
+        setAgent(res.agents[0])
+      } else {
+        // Nenhum agente existe, redirecionar para o wizard
+        navigate("/app/agent/new", { replace: true })
       }
+    } catch {
+      // Em caso de erro, permitir criar um novo
+      navigate("/app/agent/new", { replace: true })
+    } finally {
+      setLoading(false)
     }
-    load()
-  }, [id])
+  }, [navigate])
+
+  useEffect(() => {
+    loadAgent()
+  }, [loadAgent])
 
   const handleTabChange = (value: string) => {
     setSearchParams({ tab: value })
@@ -48,6 +48,11 @@ export default function AgentDetailPage() {
 
   const handleUpdated = (updated: Agent) => {
     setAgent(updated)
+  }
+
+  const handleDeleted = () => {
+    setAgent(null)
+    navigate("/app/agent/new", { replace: true })
   }
 
   if (loading) {
@@ -58,13 +63,7 @@ export default function AgentDetailPage() {
     )
   }
 
-  if (error || !agent) {
-    return (
-      <div className="py-20 text-center">
-        <p className="text-muted-foreground">{error || "Agente nao encontrado"}</p>
-      </div>
-    )
-  }
+  if (!agent) return null
 
   return (
     <div className="space-y-6">
@@ -86,7 +85,11 @@ export default function AgentDetailPage() {
         </TabsList>
 
         <TabsContent value="perfil" className="mt-6">
-          <AgentProfile agent={agent} onUpdated={handleUpdated} />
+          <AgentProfile
+            agent={agent}
+            onUpdated={handleUpdated}
+            onDeleted={handleDeleted}
+          />
         </TabsContent>
 
         <TabsContent value="treinamentos" className="mt-6">
