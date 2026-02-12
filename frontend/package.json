@@ -8,7 +8,7 @@
     "build": "tsc -b && vite build",
     "lint": "eslint .",
     "preview": "vite preview",
-    "start": "serve -s dist -l ${PORT:-3000}"
+    "start": "node scripts/gen-env.js && serve -s dist -l ${PORT:-3000}"
   },
   "dependencies": {
     "@fontsource-variable/inter": "^5.2.8",

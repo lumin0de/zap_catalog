@@ -1,9 +1,14 @@
 const MELI_AUTH_URL = "https://auth.mercadolivre.com.br/authorization"
 const STATE_KEY = "meli_oauth_state"
 
+function getEnv(key: "VITE_MELI_CLIENT_ID" | "VITE_MELI_REDIRECT_URI"): string {
+  const w = typeof window !== "undefined" && (window as Window & { __ENV__?: Record<string, string> }).__ENV__
+  return (w?.[key] ?? import.meta.env[key]) ?? ""
+}
+
 export function startMeliOAuth(): void {
-  const clientId = import.meta.env.VITE_MELI_CLIENT_ID
-  const redirectUri = import.meta.env.VITE_MELI_REDIRECT_URI
+  const clientId = getEnv("VITE_MELI_CLIENT_ID")
+  const redirectUri = getEnv("VITE_MELI_REDIRECT_URI")
 
   const state = crypto.randomUUID()
   sessionStorage.setItem(STATE_KEY, state)
