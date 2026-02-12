@@ -20,6 +20,8 @@ interface AuthState {
   meli: MeliIntegration | null
   loading: boolean
   initialized: boolean
+  /** "unavailable" when edge times out / 504; "unauthorized" after 401 */
+  loadError: "unavailable" | "unauthorized" | null
 }
 
 interface AuthContextType extends AuthState {
@@ -29,9 +31,23 @@ interface AuthContextType extends AuthState {
   resetPassword: (email: string) => Promise<void>
   refreshProfile: () => Promise<void>
   refreshIntegrations: () => Promise<void>
+  retryLoadUserData: () => void
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined)
+
+const MAX_LOAD_ATTEMPTS = 2
+const BACKOFF_MS = [2_000, 5_000]
+
+function isTimeoutOr504(err: unknown): boolean {
+  const msg = err instanceof Error ? err.message : String(err)
+  return msg.includes("Timeout") || msg.includes("504")
+}
+
+function is401(err: unknown): boolean {
+  const msg = err instanceof Error ? err.message : String(err)
+  return msg.includes("Unauthorized") || msg.includes("401")
+}
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [state, setState] = useState<AuthState>({
@@ -42,18 +58,23 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     meli: null,
     loading: true,
     initialized: false,
+    loadError: null,
   })
 
-  // Prevent duplicate loadUserData calls (getSession + onAuthStateChange race)
-  const loadingRef = useRef(false)
+  const initializingRef = useRef(false)
+  const loadAttemptRef = useRef(0)
+  const lastLoadFailureRef = useRef<number>(0)
+  const FAILURE_COOLDOWN_MS = 10_000
 
   const loadUserData = useCallback(async () => {
-    // Skip if already loading (prevents duplicate calls from getSession + onAuthStateChange)
-    if (loadingRef.current) return
-    loadingRef.current = true
+    if (initializingRef.current) return
+    initializingRef.current = true
+    loadAttemptRef.current += 1
+    const attempt = loadAttemptRef.current
+
+    setState((prev) => ({ ...prev, loadError: null }))
 
     try {
-      // Use allSettled so partial failures don't discard successful results
       const [profileResult, integrationsResult] = await Promise.allSettled([
         callEdgeFunction<{ profile: Profile }>("get-profile"),
         callEdgeFunction<{ whatsapp: WhatsAppIntegration | null; meli: MeliIntegration | null }>(
@@ -68,11 +89,51 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const meli =
         integrationsResult.status === "fulfilled" ? integrationsResult.value.meli : null
 
-      if (profileResult.status === "rejected") {
-        console.error("[AuthContext] get-profile failed:", profileResult.reason)
+      const profileRejected = profileResult.status === "rejected"
+      const integrationsRejected = integrationsResult.status === "rejected"
+      const profileErr = profileRejected ? profileResult.reason : null
+      const integrationsErr = integrationsRejected ? integrationsResult.reason : null
+
+      if (profileRejected && profileErr && is401(profileErr)) {
+        lastLoadFailureRef.current = Date.now()
+        setState((prev) => ({
+          ...prev,
+          loading: false,
+          initialized: true,
+          loadError: "unauthorized",
+        }))
+        initializingRef.current = false
+        return
       }
-      if (integrationsResult.status === "rejected") {
-        console.error("[AuthContext] get-integrations failed:", integrationsResult.reason)
+      if (integrationsRejected && integrationsErr && is401(integrationsErr)) {
+        lastLoadFailureRef.current = Date.now()
+        setState((prev) => ({
+          ...prev,
+          loading: false,
+          initialized: true,
+          loadError: "unauthorized",
+        }))
+        initializingRef.current = false
+        return
+      }
+
+      if (profileRejected) {
+        console.error("[AuthContext] get-profile failed (attempt " + attempt + "):", profileErr)
+      }
+      if (integrationsRejected) {
+        console.error("[AuthContext] get-integrations failed (attempt " + attempt + "):", integrationsErr)
+      }
+
+      const anyTimeout = (profileRejected && profileErr && isTimeoutOr504(profileErr)) ||
+        (integrationsRejected && integrationsErr && isTimeoutOr504(integrationsErr))
+
+      if (anyTimeout && attempt < MAX_LOAD_ATTEMPTS) {
+        const delayMs = BACKOFF_MS[attempt - 1] ?? 2000
+        console.warn(`[AuthContext] timeout on attempt ${attempt}, retry in ${delayMs}ms`)
+        setState((prev) => ({ ...prev, loading: false, initialized: true }))
+        setTimeout(() => loadUserData(), delayMs)
+        initializingRef.current = false
+        return
       }
 
       setState((prev) => ({
@@ -82,14 +143,28 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         meli: meli ?? prev.meli,
         loading: false,
         initialized: true,
+        loadError: anyTimeout && attempt >= MAX_LOAD_ATTEMPTS ? "unavailable" : null,
       }))
     } catch (err) {
-      console.error("[AuthContext] Failed to load user data:", err)
-      setState((prev) => ({ ...prev, loading: false, initialized: true }))
+      console.error("[AuthContext] loadUserData error:", err)
+      lastLoadFailureRef.current = Date.now()
+      const timeoutOr504 = isTimeoutOr504(err)
+      const unauthorized = is401(err)
+      setState((prev) => ({
+        ...prev,
+        loading: false,
+        initialized: true,
+        loadError: unauthorized ? "unauthorized" : timeoutOr504 && attempt >= MAX_LOAD_ATTEMPTS ? "unavailable" : null,
+      }))
     } finally {
-      loadingRef.current = false
+      initializingRef.current = false
     }
   }, [])
+
+  const retryLoadUserData = useCallback(() => {
+    loadAttemptRef.current = 0
+    loadUserData()
+  }, [loadUserData])
 
   useEffect(() => {
     let initialLoadDone = false
@@ -103,6 +178,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       }))
 
       if (session?.user) {
+        loadAttemptRef.current = 0
         loadUserData()
       } else {
         setState((prev) => ({ ...prev, loading: false, initialized: true }))
@@ -119,11 +195,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       }))
 
       if (session?.user) {
-        // Skip if getSession already triggered loadUserData (initial SIGNED_IN event)
-        if (!initialLoadDone || !loadingRef.current) {
-          await loadUserData()
+        const now = Date.now()
+        const cooldownPassed = now - lastLoadFailureRef.current > FAILURE_COOLDOWN_MS
+        const shouldLoad = !initialLoadDone || cooldownPassed
+        if (shouldLoad && !initializingRef.current) {
+          loadUserData()
         }
       } else {
+        loadAttemptRef.current = 0
+        lastLoadFailureRef.current = 0
         setState((prev) => ({
           ...prev,
           profile: null,
@@ -131,15 +211,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           meli: null,
           loading: false,
           initialized: true,
+          loadError: null,
         }))
       }
     })
 
-    // Safety net: if after 20s loading is still true, force initialized
     const safetyTimer = setTimeout(() => {
       setState((prev) => {
         if (prev.loading || !prev.initialized) {
-          console.warn("[AuthContext] Safety timeout: forcing initialized state after 20s")
+          console.warn("[AuthContext] Safety timeout: forcing initialized after 20s")
           return { ...prev, loading: false, initialized: true }
         }
         return prev
@@ -151,6 +231,23 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       clearTimeout(safetyTimer)
     }
   }, [loadUserData])
+
+  const didUnauthorizedRef = useRef(false)
+  useEffect(() => {
+    if (state.loadError !== "unauthorized" || didUnauthorizedRef.current) return
+    didUnauthorizedRef.current = true
+    supabase.auth.signOut().then(() => {
+      setState((prev) => ({
+        ...prev,
+        session: null,
+        user: null,
+        profile: null,
+        whatsapp: null,
+        meli: null,
+        loadError: null,
+      }))
+    })
+  }, [state.loadError])
 
   const signIn = async (email: string, password: string) => {
     const { error } = await supabase.auth.signInWithPassword({ email, password })
@@ -205,6 +302,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         resetPassword,
         refreshProfile,
         refreshIntegrations,
+        retryLoadUserData,
       }}
     >
       {children}

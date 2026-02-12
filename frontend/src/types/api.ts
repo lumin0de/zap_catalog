@@ -1,4 +1,5 @@
 export type EdgeFunctionAction =
+  | "ping"
   | "get-profile"
   | "update-profile"
   | "get-integrations"

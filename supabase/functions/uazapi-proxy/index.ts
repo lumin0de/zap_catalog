@@ -8,31 +8,95 @@ const MELI_CLIENT_ID = Deno.env.get("MELI_CLIENT_ID")!
 const MELI_CLIENT_SECRET = Deno.env.get("MELI_CLIENT_SECRET")!
 const MELI_REDIRECT_URI = Deno.env.get("MELI_REDIRECT_URI")!
 
-const corsHeaders = {
+const AUTH_TIMEOUT_MS = 8_000
+const RPC_TIMEOUT_MS = 8_000
+
+const corsHeaders: Record<string, string> = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers":
     "authorization, x-client-info, apikey, content-type",
+  "Access-Control-Allow-Methods": "POST, GET, OPTIONS",
 }
 
-function jsonResponse(body: unknown, status = 200) {
+function jsonResponse(
+  body: unknown,
+  status = 200,
+  extraHeaders?: Record<string, string>,
+) {
   return new Response(JSON.stringify(body), {
     status,
-    headers: { ...corsHeaders, "Content-Type": "application/json" },
+    headers: { ...corsHeaders, ...extraHeaders, "Content-Type": "application/json" },
   })
 }
 
-// --- Handlers ---
+function errorResponse(
+  error: string,
+  requestId: string,
+  status: number,
+) {
+  return jsonResponse({ error, request_id: requestId }, status)
+}
+
+function now(): number {
+  return Date.now()
+}
+
+async function withTimeoutServer<T>(
+  promise: Promise<T>,
+  ms: number,
+  label: string,
+  requestId: string,
+): Promise<T> {
+  const timer = setTimeout(() => {
+    // Timer fires only if promise doesn't settle; we reject below
+  }, ms)
+  try {
+    const result = await Promise.race([
+      promise,
+      new Promise<never>((_, reject) =>
+        setTimeout(
+          () => reject(new Error(`[${label}] timeout after ${ms}ms`)),
+          ms,
+        ),
+      ),
+    ])
+    clearTimeout(timer)
+    return result
+  } catch (e) {
+    clearTimeout(timer)
+    throw e
+  }
+}
+
+// --- Handlers (get-profile / get-integrations: RPC only, no external fetch) ---
+
+async function handlePing(requestId: string, startMs: number) {
+  const elapsed = now() - startMs
+  return jsonResponse({
+    ok: true,
+    ts: new Date().toISOString(),
+    ms: elapsed,
+    request_id: requestId,
+  })
+}
 
 async function handleGetProfile(
   admin: ReturnType<typeof createClient>,
   userId: string,
+  requestId: string,
+  log: (msg: string, ms?: number) => void,
 ) {
-  const { data, error } = await admin.rpc("zc_get_profile", {
-    p_user_id: userId,
-  })
+  const t0 = now()
+  const { data, error } = await withTimeoutServer(
+    admin.rpc("zc_get_profile", { p_user_id: userId }),
+    RPC_TIMEOUT_MS,
+    "zc_get_profile",
+    requestId,
+  )
+  log(`rpc zc_get_profile`, now() - t0)
   if (error) {
-    console.error("get-profile RPC error:", error)
-    return jsonResponse({ error: error.message }, 500)
+    log(`rpc zc_get_profile error: ${error.message}`)
+    return errorResponse(error.message, requestId, 500)
   }
   return jsonResponse({ profile: data })
 }
@@ -41,35 +105,46 @@ async function handleUpdateProfile(
   admin: ReturnType<typeof createClient>,
   userId: string,
   params: Record<string, unknown>,
+  requestId: string,
 ) {
-  const { data, error } = await admin.rpc("zc_update_profile", {
-    p_user_id: userId,
-    p_full_name: params.fullName as string,
-    p_company_name: (params.companyName as string) ?? "",
-  })
-  if (error) {
-    console.error("update-profile RPC error:", error)
-    return jsonResponse({ error: error.message }, 500)
-  }
+  const { data, error } = await withTimeoutServer(
+    admin.rpc("zc_update_profile", {
+      p_user_id: userId,
+      p_full_name: params.fullName as string,
+      p_company_name: (params.companyName as string) ?? "",
+    }),
+    RPC_TIMEOUT_MS,
+    "zc_update_profile",
+    requestId,
+  )
+  if (error) return errorResponse(error.message, requestId, 500)
   return jsonResponse({ profile: data })
 }
 
 async function handleGetIntegrations(
   admin: ReturnType<typeof createClient>,
   userId: string,
+  requestId: string,
+  log: (msg: string, ms?: number) => void,
 ) {
+  const t0 = now()
   const [whatsappRes, meliRes] = await Promise.all([
-    admin.rpc("zc_get_whatsapp", { p_user_id: userId }),
-    admin.rpc("zc_get_meli", { p_user_id: userId }),
+    withTimeoutServer(
+      admin.rpc("zc_get_whatsapp", { p_user_id: userId }),
+      RPC_TIMEOUT_MS,
+      "zc_get_whatsapp",
+      requestId,
+    ),
+    withTimeoutServer(
+      admin.rpc("zc_get_meli", { p_user_id: userId }),
+      RPC_TIMEOUT_MS,
+      "zc_get_meli",
+      requestId,
+    ),
   ])
-
-  if (whatsappRes.error) {
-    console.error("get-whatsapp RPC error:", whatsappRes.error)
-  }
-  if (meliRes.error) {
-    console.error("get-meli RPC error:", meliRes.error)
-  }
-
+  log(`rpc get-integrations (whatsapp+meli)`, now() - t0)
+  if (whatsappRes.error) log(`rpc zc_get_whatsapp error: ${whatsappRes.error.message}`)
+  if (meliRes.error) log(`rpc zc_get_meli error: ${meliRes.error.message}`)
   return jsonResponse({
     whatsapp: whatsappRes.data ?? null,
     meli: meliRes.data ?? null,
@@ -80,27 +155,22 @@ async function handleInit(
   admin: ReturnType<typeof createClient>,
   userId: string,
 ) {
-  // First, clean up any existing instance
   const { data: existing } = await admin.rpc("zc_get_whatsapp", {
     p_user_id: userId,
   })
   if (existing?.instance_token) {
-    console.log("Cleaning up existing instance before init:", existing.instance_name)
     try {
       await fetch(`${UAZAPI_BASE_URL}/instance/delete`, {
         method: "GET",
         headers: { Token: existing.instance_token },
       })
     } catch {
-      // Ignore cleanup errors
+      // Ignore
     }
     await admin.rpc("zc_delete_whatsapp", { p_user_id: userId })
   }
 
   const instanceName = `zc_${userId.substring(0, 8)}`
-
-  console.log("Calling UAZAPI init with instance_name:", instanceName)
-
   const uazapiRes = await fetch(`${UAZAPI_BASE_URL}/instance/init`, {
     method: "POST",
     headers: {
@@ -112,14 +182,10 @@ async function handleInit(
 
   if (!uazapiRes.ok) {
     const err = await uazapiRes.text()
-    console.error("UAZAPI init failed:", uazapiRes.status, err)
     return jsonResponse({ error: `Falha ao criar instância UAZAPI: ${err}` }, 502)
   }
 
   const uazapiData = await uazapiRes.json()
-  console.log("UAZAPI init response keys:", Object.keys(uazapiData))
-
-  // UAZAPI returns token inside instance object
   const instanceToken =
     uazapiData.instance?.token ??
     uazapiData.token ??
@@ -128,11 +194,8 @@ async function handleInit(
   const resolvedName = uazapiData.instance?.name ?? instanceName
 
   if (!instanceToken) {
-    console.error("UAZAPI init response missing token:", JSON.stringify(uazapiData))
     return jsonResponse({ error: "UAZAPI não retornou token da instância" }, 502)
   }
-
-  console.log("Instance created:", resolvedName, "token length:", instanceToken.length)
 
   const { error } = await admin.rpc("zc_upsert_whatsapp", {
     p_user_id: userId,
@@ -141,10 +204,7 @@ async function handleInit(
     p_is_connected: false,
   })
 
-  if (error) {
-    console.error("zc_upsert_whatsapp error:", error)
-    return jsonResponse({ error: error.message }, 500)
-  }
+  if (error) return jsonResponse({ error: error.message }, 500)
 
   return jsonResponse({
     instance_name: resolvedName,
@@ -163,8 +223,6 @@ async function handleConnect(
     return jsonResponse({ error: "Nenhuma instância WhatsApp encontrada. Crie uma primeiro." }, 404)
   }
 
-  console.log("Calling UAZAPI connect for instance:", whatsapp.instance_name)
-
   const uazapiRes = await fetch(`${UAZAPI_BASE_URL}/instance/connect`, {
     method: "POST",
     headers: {
@@ -176,27 +234,14 @@ async function handleConnect(
 
   if (!uazapiRes.ok) {
     const err = await uazapiRes.text()
-    console.error("UAZAPI connect failed:", uazapiRes.status, err)
     return jsonResponse({ error: `Falha ao gerar QR code: ${err}` }, 502)
   }
 
   const data = await uazapiRes.json()
-
-  // IMPORTANT: data.connected and data.status?.connected from the /instance/connect
-  // endpoint do NOT mean WhatsApp is paired. They indicate the instance is active in UAZAPI.
-  // The ONLY reliable indicator is data.instance?.status === "connected".
   const instanceStatus = data.instance?.status ?? "connecting"
   const isConnected = instanceStatus === "connected"
   const qrcode = data.instance?.qrcode ?? ""
   const pairingCode = data.instance?.paircode ?? ""
-
-  console.log("UAZAPI connect:", {
-    isConnected,
-    hasQrcode: !!qrcode,
-    instanceStatus,
-    rawConnected: data.connected,
-    rawStatusConnected: data.status?.connected,
-  })
 
   if (isConnected) {
     await admin.rpc("zc_update_whatsapp_status", {
@@ -231,25 +276,14 @@ async function handleStatus(
 
   if (!uazapiRes.ok) {
     const err = await uazapiRes.text()
-    console.error("UAZAPI status failed:", uazapiRes.status, err)
     return jsonResponse({ error: "Falha ao verificar status" }, 502)
   }
 
   const data = await uazapiRes.json()
-
-  // UAZAPI status response structure:
-  // { instance: { status: "connected"|"disconnected"|... }, status: { connected: bool, loggedIn: bool } }
   const isConnected =
     data.status?.connected === true ||
     data.instance?.status === "connected" ||
     data.connected === true
-
-  console.log("Status check:", {
-    "data.status?.connected": data.status?.connected,
-    "data.instance?.status": data.instance?.status,
-    "data.connected": data.connected,
-    isConnected,
-  })
 
   await admin.rpc("zc_update_whatsapp_status", {
     p_user_id: userId,
@@ -276,7 +310,6 @@ async function handleWebhook(
   }
 
   const webhookUrl = params.webhookUrl as string
-
   const uazapiRes = await fetch(`${UAZAPI_BASE_URL}/webhook`, {
     method: "POST",
     headers: {
@@ -310,7 +343,6 @@ async function handleDisconnect(
     return jsonResponse({ error: "Nenhuma instância WhatsApp" }, 404)
   }
 
-  // Logout from UAZAPI (best-effort, uses GET per UAZAPI API)
   try {
     const controller = new AbortController()
     const timeout = setTimeout(() => controller.abort(), 8000)
@@ -321,7 +353,7 @@ async function handleDisconnect(
     })
     clearTimeout(timeout)
   } catch {
-    // Ignore logout errors
+    // Ignore
   }
 
   await admin.rpc("zc_update_whatsapp_status", {
@@ -340,7 +372,6 @@ async function handleDelete(
     p_user_id: userId,
   })
 
-  // Delete from UAZAPI (best-effort, uses GET per UAZAPI API)
   if (whatsapp?.instance_token) {
     try {
       const controller = new AbortController()
@@ -352,21 +383,15 @@ async function handleDelete(
       })
       clearTimeout(timeout)
     } catch {
-      // Ignore UAZAPI deletion errors
+      // Ignore
     }
   }
 
-  // Always clean up local DB record
   const { error } = await admin.rpc("zc_delete_whatsapp", { p_user_id: userId })
-  if (error) {
-    console.error("zc_delete_whatsapp error:", error)
-    // Still return success - best-effort cleanup
-  }
+  if (error) console.error("zc_delete_whatsapp error:", error)
 
   return jsonResponse({ success: true })
 }
-
-// --- Mercado Livre handlers ---
 
 async function ensureMeliToken(
   admin: ReturnType<typeof createClient>,
@@ -378,14 +403,13 @@ async function ensureMeliToken(
   }
 
   const expiresAt = new Date(meli.token_expires_at)
-  const now = new Date()
+  const now_ = Date.now()
   const thirtyMinutes = 30 * 60 * 1000
 
-  if (expiresAt.getTime() - now.getTime() > thirtyMinutes) {
+  if (expiresAt.getTime() - now_ > thirtyMinutes) {
     return { access_token: meli.access_token, seller_id: meli.seller_id }
   }
 
-  console.log(`[meli] Refreshing token for user ${userId.substring(0, 8)}`)
   const res = await fetch("https://api.mercadolibre.com/oauth/token", {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
@@ -421,13 +445,12 @@ async function handleMeliExchange(
   admin: ReturnType<typeof createClient>,
   userId: string,
   params: Record<string, unknown>,
+  requestId: string,
 ) {
   const code = params.code as string
   if (!code) {
     return jsonResponse({ error: "Código de autorização não fornecido" }, 400)
   }
-
-  console.log(`[meli] Exchanging code for user ${userId.substring(0, 8)}`)
 
   const tokenRes = await fetch("https://api.mercadolibre.com/oauth/token", {
     method: "POST",
@@ -444,26 +467,21 @@ async function handleMeliExchange(
   if (!tokenRes.ok) {
     const errText = await tokenRes.text()
     console.error("[meli] Token exchange failed:", tokenRes.status, errText)
-    return jsonResponse({ error: "Falha ao trocar código por tokens do Mercado Livre" }, 502)
+    return errorResponse("Falha ao trocar código por tokens do Mercado Livre", requestId, 502)
   }
 
   const tokenData = await tokenRes.json()
-  console.log("[meli] Token exchange success, user_id:", tokenData.user_id)
 
+  let nickname = ""
   const userRes = await fetch("https://api.mercadolibre.com/users/me", {
     headers: {
       Authorization: `Bearer ${tokenData.access_token}`,
       Accept: "application/json",
     },
   })
-
-  let nickname = ""
   if (userRes.ok) {
     const userData = await userRes.json()
     nickname = userData.nickname ?? ""
-    console.log("[meli] User info:", { nickname, id: userData.id })
-  } else {
-    console.warn("[meli] Failed to fetch user info:", userRes.status)
   }
 
   const tokenExpiresAt = new Date(Date.now() + tokenData.expires_in * 1000).toISOString()
@@ -480,7 +498,7 @@ async function handleMeliExchange(
 
   if (dbError) {
     console.error("[meli] DB upsert error:", dbError)
-    return jsonResponse({ error: dbError.message }, 500)
+    return errorResponse(dbError.message, requestId, 500)
   }
 
   return jsonResponse({
@@ -494,61 +512,82 @@ async function handleMeliDisconnect(
   admin: ReturnType<typeof createClient>,
   userId: string,
 ) {
-  console.log(`[meli] Disconnecting user ${userId.substring(0, 8)}`)
   const { error } = await admin.rpc("zc_delete_meli", { p_user_id: userId })
-  if (error) {
-    console.error("[meli] delete error:", error)
-  }
+  if (error) console.error("[meli] delete error:", error)
   return jsonResponse({ success: true })
 }
 
 // --- Main handler ---
 
 Deno.serve(async (req) => {
+  const requestId = crypto.randomUUID()
+  const startMs = now()
+
   if (req.method === "OPTIONS") {
     return new Response("ok", { headers: corsHeaders })
   }
 
+  const url = new URL(req.url)
+  console.log(`[${requestId}] incoming method=${req.method} url=${url.pathname}`)
+
+  const hasServiceRole = !!SUPABASE_SERVICE_ROLE_KEY
+  const urlPrefix = SUPABASE_URL ? SUPABASE_URL.substring(0, 40) : "(missing)"
+  console.log(`[${requestId}] hasServiceRole=${hasServiceRole} SUPABASE_URL_prefix=${urlPrefix}`)
+
   try {
-    // Authenticate user
-    const authHeader = req.headers.get("authorization")
-    if (!authHeader) {
-      return jsonResponse({ error: "Missing authorization" }, 401)
-    }
-
-    const supabaseAuth = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
-    const token = authHeader.replace("Bearer ", "")
-    const {
-      data: { user },
-      error: authError,
-    } = await supabaseAuth.auth.getUser(token)
-
-    if (authError || !user) {
-      return jsonResponse({ error: "Unauthorized" }, 401)
-    }
-
-    // Parse request
     let body: Record<string, unknown>
+    const parseStart = now()
     try {
       body = await req.json()
     } catch {
-      return jsonResponse({ error: "Invalid JSON body" }, 400)
+      return errorResponse("Invalid JSON body", requestId, 400)
     }
+    console.log(`[${requestId}] parse_json_ms=${now() - parseStart}`)
 
     const { action, ...params } = body
 
-    console.log(`[uazapi-proxy] action=${action} user=${user.id.substring(0, 8)}`)
+    if (action === "ping" || action === "health") {
+      return await handlePing(requestId, startMs)
+    }
 
-    // Admin client for DB operations
+    const authHeader = req.headers.get("authorization")
+    if (!authHeader) {
+      return errorResponse("Missing authorization", requestId, 401)
+    }
+
+    const token = authHeader.replace("Bearer ", "")
+    const authClient = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
+    const authStart = now()
+    const {
+      data: { user },
+      error: authError,
+    } = await withTimeoutServer(
+      authClient.auth.getUser(token),
+      AUTH_TIMEOUT_MS,
+      "auth.getUser",
+      requestId,
+    )
+    console.log(`[${requestId}] auth.getUser_ms=${now() - authStart}`)
+
+    if (authError || !user) {
+      return errorResponse("Unauthorized", requestId, 401)
+    }
+
     const admin = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
+
+    const log = (msg: string, ms?: number) => {
+      console.log(`[${requestId}] ${msg}${ms !== undefined ? ` ${ms}ms` : ""}`)
+    }
+
+    log(`action=${action} user=${user.id.substring(0, 8)}`)
 
     switch (action) {
       case "get-profile":
-        return await handleGetProfile(admin, user.id)
+        return await handleGetProfile(admin, user.id, requestId, log)
       case "update-profile":
-        return await handleUpdateProfile(admin, user.id, params)
+        return await handleUpdateProfile(admin, user.id, params, requestId)
       case "get-integrations":
-        return await handleGetIntegrations(admin, user.id)
+        return await handleGetIntegrations(admin, user.id, requestId, log)
       case "init":
         return await handleInit(admin, user.id)
       case "connect":
@@ -562,17 +601,18 @@ Deno.serve(async (req) => {
       case "delete":
         return await handleDelete(admin, user.id)
       case "meli-exchange":
-        return await handleMeliExchange(admin, user.id, params)
+        return await handleMeliExchange(admin, user.id, params, requestId)
       case "meli-disconnect":
         return await handleMeliDisconnect(admin, user.id)
       default:
-        return jsonResponse({ error: `Ação desconhecida: ${action}` }, 400)
+        return errorResponse(`Ação desconhecida: ${action}`, requestId, 400)
     }
   } catch (err) {
-    console.error("Edge function unhandled error:", err)
-    return jsonResponse(
-      { error: err instanceof Error ? err.message : "Erro interno do servidor" },
-      500,
-    )
+    const message = err instanceof Error ? err.message : "Erro interno do servidor"
+    console.error(`[${requestId}] unhandled error:`, message)
+    if (message.includes("timeout")) {
+      return errorResponse(message, requestId, 504)
+    }
+    return errorResponse(message, requestId, 500)
   }
 })
