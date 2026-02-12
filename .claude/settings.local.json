@@ -22,7 +22,8 @@
       "Bash(npx supabase functions log:*)",
       "Bash(npx supabase:*)",
       "Bash(python3:*)",
-      "Bash(python:*)"
+      "Bash(python:*)",
+      "Bash(where:*)"
     ],
     "defaultMode": "acceptEdits"
   }
