@@ -70,68 +70,9 @@ async function handleGetIntegrations(
     console.error("get-meli RPC error:", meliRes.error)
   }
 
-  let whatsapp = whatsappRes.data ?? null
-
-  // Verify WhatsApp instance still exists in UAZAPI
-  if (whatsapp?.instance_token) {
-    try {
-      const controller = new AbortController()
-      const timeout = setTimeout(() => controller.abort(), 8000)
-      const statusRes = await fetch(`${UAZAPI_BASE_URL}/instance/status`, {
-        method: "GET",
-        headers: { Token: whatsapp.instance_token },
-        signal: controller.signal,
-      })
-      clearTimeout(timeout)
-
-      if (!statusRes.ok) {
-        // Instance no longer exists in UAZAPI — clean up DB
-        console.log(
-          `UAZAPI status returned ${statusRes.status} for instance ${whatsapp.instance_name}, cleaning up DB`,
-        )
-        await admin.rpc("zc_delete_whatsapp", { p_user_id: userId })
-        whatsapp = null
-      } else {
-        // Update connected status from UAZAPI
-        const statusData = await statusRes.json()
-        const isConnected =
-          statusData.status?.connected === true ||
-          statusData.instance?.status === "connected" ||
-          statusData.connected === true
-
-        if (whatsapp.is_connected !== isConnected) {
-          await admin.rpc("zc_update_whatsapp_status", {
-            p_user_id: userId,
-            p_is_connected: isConnected,
-          })
-          whatsapp = { ...whatsapp, is_connected: isConnected }
-        }
-      }
-    } catch (err) {
-      // Network error or timeout — keep existing DB data, don't block the load
-      console.warn("UAZAPI status check during get-integrations failed:", err)
-    }
-  }
-
-  // Proactively refresh ML token if close to expiry
-  let meli = meliRes.data ?? null
-  if (meli?.refresh_token && meli?.token_expires_at) {
-    const expiresAt = new Date(meli.token_expires_at)
-    const now = new Date()
-    if (expiresAt.getTime() - now.getTime() < 30 * 60 * 1000) {
-      try {
-        await ensureMeliToken(admin, userId)
-        const refreshed = await admin.rpc("zc_get_meli", { p_user_id: userId })
-        meli = refreshed.data ?? meli
-      } catch {
-        console.warn("[meli] Proactive token refresh failed during get-integrations")
-      }
-    }
-  }
-
   return jsonResponse({
-    whatsapp,
-    meli,
+    whatsapp: whatsappRes.data ?? null,
+    meli: meliRes.data ?? null,
   })
 }
 
