@@ -9,6 +9,9 @@ token.json
 # Intermediários
 .tmp/
 
+# Supabase local state (contains project-ref and connection URLs)
+supabase/.temp/
+
 # Python
 __pycache__/
 *.pyc

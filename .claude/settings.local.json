@@ -23,7 +23,8 @@
       "Bash(npx supabase:*)",
       "Bash(python3:*)",
       "Bash(python:*)",
-      "Bash(where:*)"
+      "Bash(where:*)",
+      "Bash(git rm:*)"
     ],
     "defaultMode": "acceptEdits"
   }
