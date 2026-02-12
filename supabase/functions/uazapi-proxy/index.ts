@@ -160,9 +160,12 @@ async function handleInit(
   })
   if (existing?.instance_token) {
     try {
-      await fetch(`${UAZAPI_BASE_URL}/instance/delete`, {
-        method: "GET",
-        headers: { Token: existing.instance_token },
+      await fetch(`${UAZAPI_BASE_URL}/instance`, {
+        method: "DELETE",
+        headers: {
+          Accept: "application/json",
+          token: existing.instance_token,
+        },
       })
     } catch {
       // Ignore
@@ -346,9 +349,12 @@ async function handleDisconnect(
   try {
     const controller = new AbortController()
     const timeout = setTimeout(() => controller.abort(), 8000)
-    await fetch(`${UAZAPI_BASE_URL}/instance/logout`, {
-      method: "GET",
-      headers: { Token: whatsapp.instance_token },
+    await fetch(`${UAZAPI_BASE_URL}/instance/disconnect`, {
+      method: "POST",
+      headers: {
+        Accept: "application/json",
+        token: whatsapp.instance_token,
+      },
       signal: controller.signal,
     })
     clearTimeout(timeout)
@@ -376,9 +382,12 @@ async function handleDelete(
     try {
       const controller = new AbortController()
       const timeout = setTimeout(() => controller.abort(), 8000)
-      await fetch(`${UAZAPI_BASE_URL}/instance/delete`, {
-        method: "GET",
-        headers: { Token: whatsapp.instance_token },
+      await fetch(`${UAZAPI_BASE_URL}/instance`, {
+        method: "DELETE",
+        headers: {
+          Accept: "application/json",
+          token: whatsapp.instance_token,
+        },
         signal: controller.signal,
       })
       clearTimeout(timeout)
