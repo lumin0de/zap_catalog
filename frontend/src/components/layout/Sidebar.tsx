@@ -1,10 +1,11 @@
 import { NavLink } from "react-router"
-import { LayoutDashboard, Settings } from "lucide-react"
+import { LayoutDashboard, Settings, Bot } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { Logo } from "@/components/common/Logo"
 
 const navItems = [
   { to: "/app", label: "Dashboard", icon: LayoutDashboard, end: true },
+  { to: "/app/agent/new", label: "Agente IA", icon: Bot, end: false },
   { to: "/app/settings", label: "Configurações", icon: Settings, end: false },
 ]
 

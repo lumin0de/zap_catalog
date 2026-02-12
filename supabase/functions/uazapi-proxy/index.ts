@@ -526,6 +526,185 @@ async function handleMeliDisconnect(
   return jsonResponse({ success: true })
 }
 
+// --- Agent handlers ---
+
+async function handleListAgents(
+  admin: ReturnType<typeof createClient>,
+  userId: string,
+  requestId: string,
+  log: (msg: string, ms?: number) => void,
+) {
+  const t0 = now()
+  const { data, error } = await withTimeoutServer(
+    admin.rpc("zc_list_agents", { p_user_id: userId }),
+    RPC_TIMEOUT_MS,
+    "zc_list_agents",
+    requestId,
+  )
+  log("rpc zc_list_agents", now() - t0)
+  if (error) return errorResponse(error.message, requestId, 500)
+  return jsonResponse({ agents: data ?? [] })
+}
+
+async function handleGetAgent(
+  admin: ReturnType<typeof createClient>,
+  userId: string,
+  params: Record<string, unknown>,
+  requestId: string,
+) {
+  const { data, error } = await withTimeoutServer(
+    admin.rpc("zc_get_agent", {
+      p_user_id: userId,
+      p_agent_id: params.agentId as string,
+    }),
+    RPC_TIMEOUT_MS,
+    "zc_get_agent",
+    requestId,
+  )
+  if (error) return errorResponse(error.message, requestId, 500)
+  if (!data) return errorResponse("Agente não encontrado", requestId, 404)
+  return jsonResponse({ agent: data })
+}
+
+async function handleCreateAgent(
+  admin: ReturnType<typeof createClient>,
+  userId: string,
+  params: Record<string, unknown>,
+  requestId: string,
+) {
+  const { data, error } = await withTimeoutServer(
+    admin.rpc("zc_create_agent", {
+      p_user_id: userId,
+      p_name: params.name as string,
+      p_objective: params.objective as string,
+      p_company_description: (params.companyDescription as string) ?? "",
+      p_transfer_to_human: (params.transferToHuman as boolean) ?? true,
+      p_use_emojis: (params.useEmojis as boolean) ?? false,
+      p_restrict_topics: (params.restrictTopics as boolean) ?? false,
+      p_split_responses: (params.splitResponses as boolean) ?? false,
+    }),
+    RPC_TIMEOUT_MS,
+    "zc_create_agent",
+    requestId,
+  )
+  if (error) return errorResponse(error.message, requestId, 500)
+  return jsonResponse({ agent: data })
+}
+
+async function handleUpdateAgent(
+  admin: ReturnType<typeof createClient>,
+  userId: string,
+  params: Record<string, unknown>,
+  requestId: string,
+) {
+  const rpcParams: Record<string, unknown> = {
+    p_user_id: userId,
+    p_agent_id: params.agentId as string,
+  }
+  if (params.name !== undefined) rpcParams.p_name = params.name
+  if (params.objective !== undefined) rpcParams.p_objective = params.objective
+  if (params.companyDescription !== undefined) rpcParams.p_company_description = params.companyDescription
+  if (params.transferToHuman !== undefined) rpcParams.p_transfer_to_human = params.transferToHuman
+  if (params.summaryOnTransfer !== undefined) rpcParams.p_summary_on_transfer = params.summaryOnTransfer
+  if (params.useEmojis !== undefined) rpcParams.p_use_emojis = params.useEmojis
+  if (params.signAgentName !== undefined) rpcParams.p_sign_agent_name = params.signAgentName
+  if (params.restrictTopics !== undefined) rpcParams.p_restrict_topics = params.restrictTopics
+  if (params.splitResponses !== undefined) rpcParams.p_split_responses = params.splitResponses
+  if (params.allowReminders !== undefined) rpcParams.p_allow_reminders = params.allowReminders
+  if (params.smartSearch !== undefined) rpcParams.p_smart_search = params.smartSearch
+  if (params.timezone !== undefined) rpcParams.p_timezone = params.timezone
+  if (params.responseTime !== undefined) rpcParams.p_response_time = params.responseTime
+  if (params.interactionLimit !== undefined) rpcParams.p_interaction_limit = params.interactionLimit
+
+  const { data, error } = await withTimeoutServer(
+    admin.rpc("zc_update_agent", rpcParams),
+    RPC_TIMEOUT_MS,
+    "zc_update_agent",
+    requestId,
+  )
+  if (error) return errorResponse(error.message, requestId, 500)
+  return jsonResponse({ agent: data })
+}
+
+async function handleDeleteAgent(
+  admin: ReturnType<typeof createClient>,
+  userId: string,
+  params: Record<string, unknown>,
+  requestId: string,
+) {
+  const { error } = await withTimeoutServer(
+    admin.rpc("zc_delete_agent", {
+      p_user_id: userId,
+      p_agent_id: params.agentId as string,
+    }),
+    RPC_TIMEOUT_MS,
+    "zc_delete_agent",
+    requestId,
+  )
+  if (error) return errorResponse(error.message, requestId, 500)
+  return jsonResponse({ success: true })
+}
+
+async function handleListTrainingItems(
+  admin: ReturnType<typeof createClient>,
+  userId: string,
+  params: Record<string, unknown>,
+  requestId: string,
+) {
+  const { data, error } = await withTimeoutServer(
+    admin.rpc("zc_list_training_items", {
+      p_user_id: userId,
+      p_agent_id: params.agentId as string,
+    }),
+    RPC_TIMEOUT_MS,
+    "zc_list_training_items",
+    requestId,
+  )
+  if (error) return errorResponse(error.message, requestId, 500)
+  return jsonResponse({ items: data ?? [] })
+}
+
+async function handleCreateTrainingItem(
+  admin: ReturnType<typeof createClient>,
+  userId: string,
+  params: Record<string, unknown>,
+  requestId: string,
+) {
+  const { data, error } = await withTimeoutServer(
+    admin.rpc("zc_create_training_item", {
+      p_user_id: userId,
+      p_agent_id: params.agentId as string,
+      p_type: params.type as string,
+      p_content: params.content as string,
+      p_title: (params.title as string) ?? "",
+    }),
+    RPC_TIMEOUT_MS,
+    "zc_create_training_item",
+    requestId,
+  )
+  if (error) return errorResponse(error.message, requestId, 500)
+  return jsonResponse({ item: data })
+}
+
+async function handleDeleteTrainingItem(
+  admin: ReturnType<typeof createClient>,
+  userId: string,
+  params: Record<string, unknown>,
+  requestId: string,
+) {
+  const { error } = await withTimeoutServer(
+    admin.rpc("zc_delete_training_item", {
+      p_user_id: userId,
+      p_training_item_id: params.trainingItemId as string,
+    }),
+    RPC_TIMEOUT_MS,
+    "zc_delete_training_item",
+    requestId,
+  )
+  if (error) return errorResponse(error.message, requestId, 500)
+  return jsonResponse({ success: true })
+}
+
 // --- Main handler ---
 
 Deno.serve(async (req) => {
@@ -613,6 +792,22 @@ Deno.serve(async (req) => {
         return await handleMeliExchange(admin, user.id, params, requestId)
       case "meli-disconnect":
         return await handleMeliDisconnect(admin, user.id)
+      case "list-agents":
+        return await handleListAgents(admin, user.id, requestId, log)
+      case "get-agent":
+        return await handleGetAgent(admin, user.id, params, requestId)
+      case "create-agent":
+        return await handleCreateAgent(admin, user.id, params, requestId)
+      case "update-agent":
+        return await handleUpdateAgent(admin, user.id, params, requestId)
+      case "delete-agent":
+        return await handleDeleteAgent(admin, user.id, params, requestId)
+      case "list-training-items":
+        return await handleListTrainingItems(admin, user.id, params, requestId)
+      case "create-training-item":
+        return await handleCreateTrainingItem(admin, user.id, params, requestId)
+      case "delete-training-item":
+        return await handleDeleteTrainingItem(admin, user.id, params, requestId)
       default:
         return errorResponse(`Ação desconhecida: ${action}`, requestId, 400)
     }

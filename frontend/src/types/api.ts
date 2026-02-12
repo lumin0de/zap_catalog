@@ -11,6 +11,14 @@ export type EdgeFunctionAction =
   | "delete"
   | "meli-exchange"
   | "meli-disconnect"
+  | "list-agents"
+  | "get-agent"
+  | "create-agent"
+  | "update-agent"
+  | "delete-agent"
+  | "list-training-items"
+  | "create-training-item"
+  | "delete-training-item"
 
 export interface ConnectResponse {
   qrcode: string
