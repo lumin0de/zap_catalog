@@ -84,7 +84,7 @@ export function WebhooksTab() {
           </div>
 
           {whatsapp.webhook_url && whatsapp.webhook_enabled && (
-            <div className="rounded-md bg-emerald-50 p-3 text-sm text-emerald-800">
+            <div className="rounded-md bg-secondary p-3 text-sm text-secondary-foreground">
               Webhook ativo: {whatsapp.webhook_url}
             </div>
           )}

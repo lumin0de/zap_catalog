@@ -13,15 +13,15 @@ export function StatusBadge({ connected, className }: StatusBadgeProps) {
       className={cn(
         "gap-1.5",
         connected
-          ? "bg-emerald-100 text-emerald-800 hover:bg-emerald-100"
-          : "bg-red-100 text-red-800 hover:bg-red-100",
+          ? "bg-accent text-accent-foreground hover:bg-accent"
+          : "bg-destructive/15 text-destructive hover:bg-destructive/15",
         className,
       )}
     >
       <span
         className={cn(
           "h-2 w-2 rounded-full",
-          connected ? "bg-emerald-500" : "bg-red-500",
+          connected ? "bg-primary" : "bg-destructive",
         )}
       />
       {connected ? "Conectado" : "Desconectado"}

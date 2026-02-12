@@ -1,4 +1,4 @@
-import { MessageSquare } from "lucide-react"
+import { ShoppingBag } from "lucide-react"
 
 interface LogoProps {
   size?: "sm" | "md" | "lg"
@@ -21,7 +21,7 @@ export function Logo({ size = "md", showText = true }: LogoProps) {
   return (
     <div className="flex items-center gap-2">
       <div className="flex items-center justify-center rounded-lg bg-primary p-1.5">
-        <MessageSquare className={`${sizeMap[size]} text-primary-foreground`} />
+        <ShoppingBag className={`${sizeMap[size]} text-primary-foreground`} />
       </div>
       {showText && (
         <span className={`${textSizeMap[size]} font-bold tracking-tight text-foreground`}>

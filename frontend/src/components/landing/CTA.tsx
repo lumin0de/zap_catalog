@@ -9,10 +9,11 @@ export function CTA() {
     <section className="bg-primary py-24">
       <div className="mx-auto max-w-6xl px-4 text-center sm:px-6 lg:px-8">
         <h2 className="text-3xl font-bold tracking-tight text-primary-foreground">
-          Pronto para começar?
+          Pare de perder vendas no WhatsApp
         </h2>
         <p className="mt-4 text-lg text-primary-foreground/80">
-          Crie sua conta gratuita e conecte seu WhatsApp em minutos.
+          Cada mensagem sem resposta é uma venda perdida. Conecte seu catálogo do Mercado Livre
+          e deixe a IA atender seus clientes enquanto você foca no que importa.
         </p>
         <div className="mt-8">
           <Button
@@ -21,7 +22,7 @@ export function CTA() {
             onClick={() => navigate("/signup")}
             className="gap-2"
           >
-            Criar conta grátis
+            Começar agora
             <ArrowRight className="h-4 w-4" />
           </Button>
         </div>

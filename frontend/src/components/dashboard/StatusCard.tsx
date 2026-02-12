@@ -34,18 +34,18 @@ export function StatusCard({
           {status === "connected" && (
             <Badge
               variant="secondary"
-              className="gap-1.5 bg-emerald-100 text-emerald-800 hover:bg-emerald-100"
+              className="gap-1.5 bg-accent text-accent-foreground hover:bg-accent"
             >
-              <span className="h-2 w-2 rounded-full bg-emerald-500" />
+              <span className="h-2 w-2 rounded-full bg-primary" />
               Conectado
             </Badge>
           )}
           {status === "disconnected" && (
             <Badge
               variant="secondary"
-              className="gap-1.5 bg-red-100 text-red-800 hover:bg-red-100"
+              className="gap-1.5 bg-destructive/15 text-destructive hover:bg-destructive/15"
             >
-              <span className="h-2 w-2 rounded-full bg-red-500" />
+              <span className="h-2 w-2 rounded-full bg-destructive" />
               Desconectado
             </Badge>
           )}

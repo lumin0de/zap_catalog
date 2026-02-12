@@ -1,30 +1,42 @@
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
-import { MessageSquare, Shield, Webhook, Layers } from "lucide-react"
+import { Bot, Clock, MessageSquare, Package, TrendingUp, Shield } from "lucide-react"
 
 const features = [
   {
-    icon: MessageSquare,
-    title: "Conexão em minutos",
+    icon: Package,
+    title: "Catálogo sincronizado",
     description:
-      "Conecte seu WhatsApp em segundos escaneando um QR code. Sem configurações complexas.",
+      "Conecte sua conta do Mercado Livre e o agente aprende automaticamente seus produtos, preços, variações e disponibilidade.",
+  },
+  {
+    icon: Bot,
+    title: "Agente inteligente",
+    description:
+      "Responde perguntas sobre seus produtos com precisão — detalhes técnicos, prazos de entrega, formas de pagamento e mais.",
+  },
+  {
+    icon: Clock,
+    title: "Atendimento 24/7",
+    description:
+      "Seus clientes recebem respostas imediatas a qualquer hora do dia. Sem fila de espera, sem cliente perdido.",
+  },
+  {
+    icon: MessageSquare,
+    title: "WhatsApp nativo",
+    description:
+      "O cliente conversa no WhatsApp como faria com qualquer vendedor. Sem apps extras, sem fricção.",
+  },
+  {
+    icon: TrendingUp,
+    title: "Mais vendas, menos esforço",
+    description:
+      "Converta consultas em vendas automaticamente. O agente guia o cliente do interesse até o fechamento.",
   },
   {
     icon: Shield,
-    title: "Proxy seguro",
+    title: "Seguro e confiável",
     description:
-      "Todas as chamadas passam por uma edge function segura. Seus tokens nunca ficam expostos no navegador.",
-  },
-  {
-    icon: Webhook,
-    title: "Webhooks em tempo real",
-    description:
-      "Receba eventos de mensagens, atualizações de status e mais em tempo real via webhooks.",
-  },
-  {
-    icon: Layers,
-    title: "Multi-plataforma",
-    description:
-      "WhatsApp hoje, Mercado Livre amanhã. Um painel único para todas as suas integrações.",
+      "Seus dados ficam protegidos. O agente só acessa informações públicas do seu catálogo e nunca compartilha dados sensíveis.",
   },
 ]
 
@@ -33,13 +45,15 @@ export function Features() {
     <section className="bg-card py-24">
       <div className="mx-auto max-w-6xl px-4 sm:px-6 lg:px-8">
         <div className="mx-auto max-w-2xl text-center">
-          <h2 className="text-3xl font-bold tracking-tight">Por que ZapCatalog?</h2>
+          <h2 className="text-3xl font-bold tracking-tight">
+            Tudo que seu negócio precisa para vender mais
+          </h2>
           <p className="mt-4 text-lg text-muted-foreground">
-            Tudo que você precisa para integrar o WhatsApp ao seu negócio
+            Um agente que conhece seus produtos tão bem quanto você — e atende sem parar
           </p>
         </div>
 
-        <div className="mt-16 grid gap-6 sm:grid-cols-2 lg:grid-cols-4">
+        <div className="mt-16 grid gap-6 sm:grid-cols-2 lg:grid-cols-3">
           {features.map((feature) => (
             <Card key={feature.title} className="border-0 shadow-sm">
               <CardHeader>

@@ -24,7 +24,8 @@
       "Bash(python3:*)",
       "Bash(python:*)",
       "Bash(where:*)",
-      "Bash(git rm:*)"
+      "Bash(git rm:*)",
+      "Bash(npx vite build)"
     ],
     "defaultMode": "acceptEdits"
   }

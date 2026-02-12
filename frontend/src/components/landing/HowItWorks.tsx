@@ -1,20 +1,29 @@
-import { UserPlus, QrCode, Webhook } from "lucide-react"
+import { ShoppingBag, MessageSquare, Bot, Rocket } from "lucide-react"
 
 const steps = [
   {
-    icon: UserPlus,
-    title: "Crie sua conta",
-    description: "Cadastre-se em segundos com e-mail e senha.",
+    icon: ShoppingBag,
+    title: "Conecte seu Mercado Livre",
+    description:
+      "Autorize sua conta com um clique. O sistema importa seu catálogo de produtos automaticamente.",
   },
   {
-    icon: QrCode,
-    title: "Escaneie o QR Code",
-    description: "Conecte seu WhatsApp escaneando o QR code gerado automaticamente.",
+    icon: MessageSquare,
+    title: "Conecte seu WhatsApp",
+    description:
+      "Escaneie o QR Code e vincule seu número de WhatsApp em segundos.",
   },
   {
-    icon: Webhook,
-    title: "Configure webhooks",
-    description: "Defina a URL do webhook e comece a receber eventos em tempo real.",
+    icon: Bot,
+    title: "O agente aprende seu catálogo",
+    description:
+      "A IA é treinada com seus produtos, preços e estoque. Pronta para responder como um vendedor especialista.",
+  },
+  {
+    icon: Rocket,
+    title: "Comece a vender",
+    description:
+      "Clientes enviam mensagens e recebem respostas instantâneas e precisas sobre seus produtos.",
   },
 ]
 
@@ -25,11 +34,11 @@ export function HowItWorks() {
         <div className="mx-auto max-w-2xl text-center">
           <h2 className="text-3xl font-bold tracking-tight">Como funciona</h2>
           <p className="mt-4 text-lg text-muted-foreground">
-            Três passos simples para começar
+            Quatro passos simples para transformar seu WhatsApp em uma máquina de vendas
           </p>
         </div>
 
-        <div className="mt-16 grid gap-8 md:grid-cols-3">
+        <div className="mt-16 grid gap-8 md:grid-cols-4">
           {steps.map((step, i) => (
             <div key={step.title} className="relative flex flex-col items-center text-center">
               <div className="mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-primary text-primary-foreground">
