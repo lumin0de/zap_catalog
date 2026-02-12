@@ -4,6 +4,7 @@ import {
   useEffect,
   useState,
   useCallback,
+  useRef,
   type ReactNode,
 } from "react"
 import { supabase } from "@/config/supabase"
@@ -43,7 +44,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     initialized: false,
   })
 
+  // Prevent duplicate loadUserData calls (getSession + onAuthStateChange race)
+  const loadingRef = useRef(false)
+
   const loadUserData = useCallback(async () => {
+    // Skip if already loading (prevents duplicate calls from getSession + onAuthStateChange)
+    if (loadingRef.current) return
+    loadingRef.current = true
+
     try {
       const [profileRes, integrationsRes] = await Promise.all([
         callEdgeFunction<{ profile: Profile }>("get-profile"),
@@ -62,11 +70,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     } catch (err) {
       console.error("[AuthContext] Failed to load user data:", err)
       setState((prev) => ({ ...prev, loading: false, initialized: true }))
+    } finally {
+      loadingRef.current = false
     }
   }, [])
 
   useEffect(() => {
+    let initialLoadDone = false
+
     supabase.auth.getSession().then(({ data: { session } }) => {
+      initialLoadDone = true
       setState((prev) => ({
         ...prev,
         session,
@@ -90,7 +103,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       }))
 
       if (session?.user) {
-        await loadUserData()
+        // Skip if getSession already triggered loadUserData (initial SIGNED_IN event)
+        if (!initialLoadDone || !loadingRef.current) {
+          await loadUserData()
+        }
       } else {
         setState((prev) => ({
           ...prev,
@@ -98,13 +114,26 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           whatsapp: null,
           meli: null,
           loading: false,
+          initialized: true,
         }))
       }
-
-      setState((prev) => ({ ...prev, initialized: true }))
     })
 
-    return () => subscription.unsubscribe()
+    // Safety net: if after 20s loading is still true, force initialized
+    const safetyTimer = setTimeout(() => {
+      setState((prev) => {
+        if (prev.loading || !prev.initialized) {
+          console.warn("[AuthContext] Safety timeout: forcing initialized state after 20s")
+          return { ...prev, loading: false, initialized: true }
+        }
+        return prev
+      })
+    }, 20_000)
+
+    return () => {
+      subscription.unsubscribe()
+      clearTimeout(safetyTimer)
+    }
   }, [loadUserData])
 
   const signIn = async (email: string, password: string) => {

@@ -1,13 +1,33 @@
 import { supabase } from "@/config/supabase"
 import type { EdgeFunctionAction } from "@/types/api"
 
+const DEFAULT_TIMEOUT_MS = 15_000
+
+function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(
+      () => reject(new Error(`[${label}] Timeout após ${ms / 1000}s`)),
+      ms,
+    )
+    promise.then(
+      (val) => { clearTimeout(timer); resolve(val) },
+      (err) => { clearTimeout(timer); reject(err) },
+    )
+  })
+}
+
 export async function callEdgeFunction<T = unknown>(
   action: EdgeFunctionAction,
   payload?: Record<string, unknown>,
+  timeoutMs = DEFAULT_TIMEOUT_MS,
 ): Promise<T> {
-  const { data, error } = await supabase.functions.invoke("uazapi-proxy", {
-    body: { action, ...payload },
-  })
+  const { data, error } = await withTimeout(
+    supabase.functions.invoke("uazapi-proxy", {
+      body: { action, ...payload },
+    }),
+    timeoutMs,
+    `callEdgeFunction(${action})`,
+  )
 
   if (error) {
     // error.context contains the parsed JSON body from the edge function
