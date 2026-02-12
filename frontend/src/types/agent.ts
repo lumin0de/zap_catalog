@@ -30,6 +30,10 @@ export interface AgentTrainingItem {
   type: TrainingItemType
   content: string
   title: string
+  file_name: string | null
+  file_size: number | null
+  file_type: string | null
+  storage_path: string | null
   created_at: string
 }
 

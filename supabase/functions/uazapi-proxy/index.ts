@@ -670,14 +670,20 @@ async function handleCreateTrainingItem(
   params: Record<string, unknown>,
   requestId: string,
 ) {
+  const rpcParams: Record<string, unknown> = {
+    p_user_id: userId,
+    p_agent_id: params.agentId as string,
+    p_type: params.type as string,
+    p_content: (params.content as string) ?? "",
+    p_title: (params.title as string) ?? "",
+  }
+  if (params.fileName) rpcParams.p_file_name = params.fileName
+  if (params.fileSize) rpcParams.p_file_size = params.fileSize
+  if (params.fileType) rpcParams.p_file_type = params.fileType
+  if (params.storagePath) rpcParams.p_storage_path = params.storagePath
+
   const { data, error } = await withTimeoutServer(
-    admin.rpc("zc_create_training_item", {
-      p_user_id: userId,
-      p_agent_id: params.agentId as string,
-      p_type: params.type as string,
-      p_content: params.content as string,
-      p_title: (params.title as string) ?? "",
-    }),
+    admin.rpc("zc_create_training_item", rpcParams),
     RPC_TIMEOUT_MS,
     "zc_create_training_item",
     requestId,
@@ -692,7 +698,7 @@ async function handleDeleteTrainingItem(
   params: Record<string, unknown>,
   requestId: string,
 ) {
-  const { error } = await withTimeoutServer(
+  const { data, error } = await withTimeoutServer(
     admin.rpc("zc_delete_training_item", {
       p_user_id: userId,
       p_training_item_id: params.trainingItemId as string,
@@ -702,6 +708,18 @@ async function handleDeleteTrainingItem(
     requestId,
   )
   if (error) return errorResponse(error.message, requestId, 500)
+
+  // Clean up storage file if this was a document with a stored file
+  if (data?.storage_path) {
+    try {
+      await admin.storage
+        .from("training-documents")
+        .remove([data.storage_path])
+    } catch (storageErr) {
+      console.error(`[${requestId}] storage cleanup error:`, storageErr)
+    }
+  }
+
   return jsonResponse({ success: true })
 }
 

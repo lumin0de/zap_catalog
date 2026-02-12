@@ -4,6 +4,7 @@ import { Input } from "@/components/ui/input"
 import { cn } from "@/lib/utils"
 import { callEdgeFunction } from "@/lib/api"
 import { TrainingItemForm } from "./TrainingItemForm"
+import { DocumentUploadForm } from "./DocumentUploadForm"
 import { TrainingItemCard } from "./TrainingItemCard"
 import type { AgentTrainingItem, TrainingItemType } from "@/types/agent"
 
@@ -105,11 +106,15 @@ export function AgentTraining({ agentId }: AgentTrainingProps) {
       </div>
 
       {/* Form */}
-      <TrainingItemForm
-        agentId={agentId}
-        activeType={activeType}
-        onCreated={handleCreated}
-      />
+      {activeType === "documento" ? (
+        <DocumentUploadForm agentId={agentId} onCreated={handleCreated} />
+      ) : (
+        <TrainingItemForm
+          agentId={agentId}
+          activeType={activeType}
+          onCreated={handleCreated}
+        />
+      )}
 
       {/* Items list */}
       {loading ? (
