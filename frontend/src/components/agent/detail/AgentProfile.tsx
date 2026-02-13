@@ -59,6 +59,8 @@ export function AgentProfile({ agent, onUpdated, onDeleted }: AgentProfileProps)
         objective,
         companyDescription: description,
       })
+      // Recompile prompt since name/objective/description affect it
+      await callEdgeFunction("compile-prompt", { agentId: agent.id })
       onUpdated(res.agent)
       toast.success("Perfil atualizado!")
     } catch (err) {

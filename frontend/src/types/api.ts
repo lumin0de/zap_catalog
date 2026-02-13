@@ -19,6 +19,8 @@ export type EdgeFunctionAction =
   | "list-training-items"
   | "create-training-item"
   | "delete-training-item"
+  | "reprocess-training-item"
+  | "compile-prompt"
 
 export interface ConnectResponse {
   qrcode: string

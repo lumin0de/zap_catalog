@@ -129,6 +129,7 @@ export function DocumentUploadForm({ agentId, onCreated }: DocumentUploadFormPro
           fileType: selectedFile.type,
           storagePath,
         },
+        60_000,
       )
 
       setProgress("done")
@@ -242,7 +243,7 @@ export function DocumentUploadForm({ agentId, onCreated }: DocumentUploadFormPro
           ) : progress === "saving" ? (
             <>
               <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-              Salvando registro...
+              Processando conteudo...
             </>
           ) : (
             "Enviar documento"

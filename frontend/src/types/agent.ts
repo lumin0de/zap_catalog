@@ -20,9 +20,14 @@ export interface Agent {
   response_time: string
   interaction_limit: number
   is_active: boolean
+  system_prompt: string
+  system_prompt_updated_at: string | null
+  total_training_chars: number
   created_at: string
   updated_at: string
 }
+
+export type ProcessingStatus = "pending" | "processing" | "done" | "error"
 
 export interface AgentTrainingItem {
   id: string
@@ -34,6 +39,10 @@ export interface AgentTrainingItem {
   file_size: number | null
   file_type: string | null
   storage_path: string | null
+  extracted_content: string
+  processing_status: ProcessingStatus
+  processing_error: string | null
+  char_count: number
   created_at: string
 }
 

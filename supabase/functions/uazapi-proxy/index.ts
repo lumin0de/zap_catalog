@@ -7,9 +7,12 @@ const UAZAPI_ADMIN_TOKEN = Deno.env.get("UAZAPI_ADMIN_TOKEN")!
 const MELI_CLIENT_ID = Deno.env.get("MELI_CLIENT_ID")!
 const MELI_CLIENT_SECRET = Deno.env.get("MELI_CLIENT_SECRET")!
 const MELI_REDIRECT_URI = Deno.env.get("MELI_REDIRECT_URI")!
+const OPENAI_API_KEY = Deno.env.get("OPENAI_API_KEY") ?? ""
 
 const AUTH_TIMEOUT_MS = 8_000
 const RPC_TIMEOUT_MS = 8_000
+const EXTRACTION_TIMEOUT_MS = 30_000
+const MAX_PROMPT_CHARS = 32_000
 
 const corsHeaders: Record<string, string> = {
   "Access-Control-Allow-Origin": "*",
@@ -526,6 +529,287 @@ async function handleMeliDisconnect(
   return jsonResponse({ success: true })
 }
 
+// --- Knowledge Base: extraction + prompt compilation ---
+
+function htmlToText(html: string): string {
+  let text = html.replace(/<script[\s\S]*?<\/script>/gi, "")
+  text = text.replace(/<style[\s\S]*?<\/style>/gi, "")
+  text = text.replace(/<nav[\s\S]*?<\/nav>/gi, "")
+  text = text.replace(/<footer[\s\S]*?<\/footer>/gi, "")
+  text = text.replace(/<header[\s\S]*?<\/header>/gi, "")
+  text = text.replace(/<[^>]+>/g, " ")
+  text = text.replace(/&nbsp;/g, " ")
+  text = text.replace(/&amp;/g, "&")
+  text = text.replace(/&lt;/g, "<")
+  text = text.replace(/&gt;/g, ">")
+  text = text.replace(/&quot;/g, '"')
+  text = text.replace(/&#39;/g, "'")
+  text = text.replace(/&#(\d+);/g, (_m, code) => String.fromCharCode(Number(code)))
+  text = text.replace(/\s+/g, " ").trim()
+  return text
+}
+
+async function extractWebsite(url: string): Promise<string> {
+  const controller = new AbortController()
+  const timeout = setTimeout(() => controller.abort(), 10_000)
+  try {
+    const res = await fetch(url, {
+      headers: {
+        "User-Agent": "Mozilla/5.0 (compatible; ZapCatalogBot/1.0)",
+        Accept: "text/html,application/xhtml+xml",
+      },
+      signal: controller.signal,
+    })
+    clearTimeout(timeout)
+    if (!res.ok) throw new Error(`HTTP ${res.status} ao acessar ${url}`)
+    const html = await res.text()
+    const text = htmlToText(html)
+    if (!text || text.length < 20) {
+      throw new Error("Conteudo insuficiente extraido da pagina")
+    }
+    return text
+  } catch (e) {
+    clearTimeout(timeout)
+    if (e instanceof DOMException && e.name === "AbortError") {
+      throw new Error(`Timeout ao acessar ${url} (10s)`)
+    }
+    throw e
+  }
+}
+
+async function extractTxtFromStorage(
+  admin: ReturnType<typeof createClient>,
+  storagePath: string,
+): Promise<string> {
+  const { data, error } = await admin.storage
+    .from("training-documents")
+    .download(storagePath)
+  if (error || !data) throw new Error(`Falha ao baixar arquivo: ${error?.message ?? "sem dados"}`)
+  return await data.text()
+}
+
+function arrayBufferToBase64(buffer: ArrayBuffer): string {
+  const bytes = new Uint8Array(buffer)
+  let binary = ""
+  for (let i = 0; i < bytes.length; i++) {
+    binary += String.fromCharCode(bytes[i])
+  }
+  return btoa(binary)
+}
+
+async function extractDocumentViaOpenAI(
+  admin: ReturnType<typeof createClient>,
+  storagePath: string,
+  fileName: string,
+): Promise<string> {
+  if (!OPENAI_API_KEY) {
+    throw new Error("Chave OpenAI nao configurada. Configure OPENAI_API_KEY nos secrets.")
+  }
+
+  const { data: fileBlob, error } = await admin.storage
+    .from("training-documents")
+    .download(storagePath)
+  if (error || !fileBlob) throw new Error(`Falha ao baixar arquivo: ${error?.message ?? "sem dados"}`)
+
+  const arrayBuffer = await fileBlob.arrayBuffer()
+  const base64 = arrayBufferToBase64(arrayBuffer)
+
+  const openaiRes = await fetch("https://api.openai.com/v1/chat/completions", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${OPENAI_API_KEY}`,
+    },
+    body: JSON.stringify({
+      model: "gpt-4o-mini",
+      messages: [
+        {
+          role: "system",
+          content:
+            "Voce e um extrator de texto. Extraia TODO o conteudo textual do documento fornecido. Retorne APENAS o texto extraido, preservando a estrutura logica (titulos, paragrafos, listas). Nao adicione comentarios ou resumos.",
+        },
+        {
+          role: "user",
+          content: [
+            {
+              type: "text",
+              text: `Extraia todo o conteudo textual deste arquivo "${fileName}":`,
+            },
+            {
+              type: "image_url",
+              image_url: {
+                url: `data:application/octet-stream;base64,${base64}`,
+              },
+            },
+          ],
+        },
+      ],
+      max_tokens: 16000,
+      temperature: 0,
+    }),
+  })
+
+  if (!openaiRes.ok) {
+    const errText = await openaiRes.text()
+    throw new Error(`OpenAI API erro ${openaiRes.status}: ${errText.substring(0, 200)}`)
+  }
+
+  const result = await openaiRes.json()
+  const content = result.choices?.[0]?.message?.content?.trim() ?? ""
+  if (!content) throw new Error("OpenAI nao retornou conteudo extraido")
+  return content
+}
+
+async function extractDocument(
+  admin: ReturnType<typeof createClient>,
+  storagePath: string,
+  fileName: string,
+): Promise<string> {
+  const ext = fileName.split(".").pop()?.toLowerCase()
+
+  if (ext === "txt") {
+    return extractTxtFromStorage(admin, storagePath)
+  }
+
+  // PDF, DOCX, DOC -> OpenAI extraction
+  return extractDocumentViaOpenAI(admin, storagePath, fileName)
+}
+
+interface TrainingContentItem {
+  type: string
+  title: string
+  extracted_content: string
+  char_count: number
+}
+
+interface AgentForPrompt {
+  name: string
+  objective: string
+  company_description: string
+  use_emojis: boolean
+  sign_agent_name: boolean
+  restrict_topics: boolean
+  transfer_to_human: boolean
+  split_responses: boolean
+}
+
+function compileSystemPrompt(
+  agent: AgentForPrompt,
+  trainingItems: TrainingContentItem[],
+): string {
+  const sections: string[] = []
+
+  const objectiveMap: Record<string, string> = {
+    suporte: "atendimento e suporte ao cliente",
+    vendas: "vendas e negociacao",
+    pessoal: "uso pessoal",
+  }
+
+  sections.push(
+    `Voce e ${agent.name}, um assistente virtual especializado em ${objectiveMap[agent.objective] ?? agent.objective}.`,
+  )
+
+  if (agent.company_description) {
+    sections.push(`\n## Sobre a empresa\n${agent.company_description}`)
+  }
+
+  // Behavior rules from config flags
+  const rules: string[] = []
+  if (agent.use_emojis) {
+    rules.push("- Use emojis nas suas respostas para tornar a conversa mais amigavel.")
+  } else {
+    rules.push("- NAO use emojis nas respostas.")
+  }
+  if (agent.restrict_topics) {
+    rules.push(
+      "- Responda APENAS sobre temas relacionados a base de conhecimento abaixo. Se o usuario perguntar algo fora do escopo, educadamente informe que so pode ajudar com assuntos da empresa.",
+    )
+  }
+  if (agent.sign_agent_name) {
+    rules.push(`- Assine suas mensagens com seu nome: ${agent.name}.`)
+  }
+  if (agent.transfer_to_human) {
+    rules.push("- Se nao conseguir resolver a duvida, oferecer transferencia para um atendente humano.")
+  }
+  if (agent.split_responses) {
+    rules.push("- Quando a resposta for longa, divida em mensagens menores e mais legiveis.")
+  }
+  rules.push("- Responda sempre em portugues brasileiro.")
+  rules.push("- Seja educado, profissional e objetivo.")
+
+  sections.push(`\n## Regras de comportamento\n${rules.join("\n")}`)
+
+  // Knowledge base
+  if (trainingItems.length > 0) {
+    sections.push("\n## Base de conhecimento")
+    sections.push("Use as informacoes abaixo para responder as perguntas dos usuarios:\n")
+
+    let totalChars = sections.join("\n").length
+    for (const item of trainingItems) {
+      const typeLabel =
+        item.type === "texto" ? "Texto" : item.type === "website" ? "Website" : "Documento"
+      const header = item.title ? `### ${item.title} (${typeLabel})` : `### ${typeLabel}`
+      const itemBlock = `${header}\n${item.extracted_content}\n`
+
+      if (totalChars + itemBlock.length > MAX_PROMPT_CHARS) {
+        const remaining = MAX_PROMPT_CHARS - totalChars - header.length - 50
+        if (remaining > 100) {
+          sections.push(
+            `${header}\n${item.extracted_content.substring(0, remaining)}...[truncado]\n`,
+          )
+        }
+        break
+      }
+
+      sections.push(itemBlock)
+      totalChars += itemBlock.length
+    }
+  }
+
+  return sections.join("\n")
+}
+
+async function recompileSystemPrompt(
+  admin: ReturnType<typeof createClient>,
+  userId: string,
+  agentId: string,
+  requestId: string,
+): Promise<void> {
+  try {
+    const { data: agent } = await admin.rpc("zc_get_agent", {
+      p_user_id: userId,
+      p_agent_id: agentId,
+    })
+    if (!agent) return
+
+    const { data: trainingItems } = await admin.rpc("zc_get_all_training_content", {
+      p_user_id: userId,
+      p_agent_id: agentId,
+    })
+
+    const items: TrainingContentItem[] = trainingItems ?? []
+    const totalChars = items.reduce(
+      (sum: number, i: TrainingContentItem) => sum + (i.char_count ?? 0),
+      0,
+    )
+
+    const systemPrompt = compileSystemPrompt(agent as AgentForPrompt, items)
+
+    await admin.rpc("zc_update_agent_system_prompt", {
+      p_user_id: userId,
+      p_agent_id: agentId,
+      p_system_prompt: systemPrompt,
+      p_total_training_chars: totalChars,
+    })
+
+    console.log(
+      `[${requestId}] system prompt recompiled: ${systemPrompt.length} chars, ${items.length} items`,
+    )
+  } catch (err) {
+    console.error(`[${requestId}] recompile error:`, err)
+  }
+}
+
 // --- Agent handlers ---
 
 async function handleListAgents(
@@ -670,12 +954,18 @@ async function handleCreateTrainingItem(
   params: Record<string, unknown>,
   requestId: string,
 ) {
+  const agentId = params.agentId as string
+  const itemType = params.type as string
+  const content = (params.content as string) ?? ""
+
+  // 1) Create DB record with processing status
   const rpcParams: Record<string, unknown> = {
     p_user_id: userId,
-    p_agent_id: params.agentId as string,
-    p_type: params.type as string,
-    p_content: (params.content as string) ?? "",
+    p_agent_id: agentId,
+    p_type: itemType,
+    p_content: content,
     p_title: (params.title as string) ?? "",
+    p_processing_status: "processing",
   }
   if (params.fileName) rpcParams.p_file_name = params.fileName
   if (params.fileSize) rpcParams.p_file_size = params.fileSize
@@ -689,7 +979,58 @@ async function handleCreateTrainingItem(
     requestId,
   )
   if (error) return errorResponse(error.message, requestId, 500)
-  return jsonResponse({ item: data })
+
+  // 2) Extract content based on type
+  let extractedContent = ""
+  let processingStatus = "done"
+  let processingError: string | null = null
+
+  try {
+    switch (itemType) {
+      case "texto":
+        extractedContent = content.trim()
+        break
+      case "website":
+        extractedContent = await extractWebsite(content)
+        break
+      case "documento":
+        extractedContent = await extractDocument(
+          admin,
+          params.storagePath as string,
+          (params.fileName as string) ?? "document",
+        )
+        break
+      case "video":
+        processingStatus = "pending"
+        processingError = "Extracao de conteudo de video sera suportada em breve."
+        break
+      default:
+        processingStatus = "error"
+        processingError = `Tipo desconhecido: ${itemType}`
+    }
+  } catch (err) {
+    processingStatus = "error"
+    processingError = err instanceof Error ? err.message : "Erro ao processar conteudo"
+    console.error(`[${requestId}] extraction error for ${itemType}:`, processingError)
+  }
+
+  // 3) Update training item with extracted content
+  const charCount = extractedContent.length
+  const { data: updatedItem } = await admin.rpc("zc_update_training_item_content", {
+    p_user_id: userId,
+    p_training_item_id: data.id,
+    p_extracted_content: extractedContent,
+    p_processing_status: processingStatus,
+    p_processing_error: processingError,
+    p_char_count: charCount,
+  })
+
+  // 4) Recompile system prompt if extraction succeeded
+  if (processingStatus === "done") {
+    await recompileSystemPrompt(admin, userId, agentId, requestId)
+  }
+
+  return jsonResponse({ item: updatedItem ?? { ...data, extracted_content: extractedContent, processing_status: processingStatus, processing_error: processingError, char_count: charCount } })
 }
 
 async function handleDeleteTrainingItem(
@@ -720,6 +1061,90 @@ async function handleDeleteTrainingItem(
     }
   }
 
+  // Recompile system prompt after deletion
+  if (data?.agent_id) {
+    await recompileSystemPrompt(admin, userId, data.agent_id, requestId)
+  }
+
+  return jsonResponse({ success: true })
+}
+
+async function handleReprocessTrainingItem(
+  admin: ReturnType<typeof createClient>,
+  userId: string,
+  params: Record<string, unknown>,
+  requestId: string,
+) {
+  const agentId = params.agentId as string
+  const trainingItemId = params.trainingItemId as string
+
+  // Fetch the specific item from the list
+  const { data: items } = await admin.rpc("zc_list_training_items", {
+    p_user_id: userId,
+    p_agent_id: agentId,
+  })
+
+  // deno-lint-ignore no-explicit-any
+  const item = (items ?? []).find((i: any) => i.id === trainingItemId)
+  if (!item) return errorResponse("Item nao encontrado", requestId, 404)
+
+  let extractedContent = ""
+  let processingStatus = "done"
+  let processingError: string | null = null
+
+  try {
+    switch (item.type) {
+      case "texto":
+        extractedContent = (item.content ?? "").trim()
+        break
+      case "website":
+        extractedContent = await extractWebsite(item.content)
+        break
+      case "documento":
+        extractedContent = await extractDocument(
+          admin,
+          item.storage_path,
+          item.file_name ?? "document",
+        )
+        break
+      default:
+        processingStatus = "error"
+        processingError = "Tipo nao suportado para reprocessamento"
+    }
+  } catch (err) {
+    processingStatus = "error"
+    processingError = err instanceof Error ? err.message : "Erro ao reprocessar"
+    console.error(`[${requestId}] reprocess error:`, processingError)
+  }
+
+  const charCount = extractedContent.length
+  const { data: updatedItem } = await admin.rpc("zc_update_training_item_content", {
+    p_user_id: userId,
+    p_training_item_id: trainingItemId,
+    p_extracted_content: extractedContent,
+    p_processing_status: processingStatus,
+    p_processing_error: processingError,
+    p_char_count: charCount,
+  })
+
+  if (processingStatus === "done") {
+    await recompileSystemPrompt(admin, userId, agentId, requestId)
+  }
+
+  return jsonResponse({
+    item: updatedItem,
+    processing_status: processingStatus,
+  })
+}
+
+async function handleCompilePrompt(
+  admin: ReturnType<typeof createClient>,
+  userId: string,
+  params: Record<string, unknown>,
+  requestId: string,
+) {
+  const agentId = params.agentId as string
+  await recompileSystemPrompt(admin, userId, agentId, requestId)
   return jsonResponse({ success: true })
 }
 
@@ -826,6 +1251,10 @@ Deno.serve(async (req) => {
         return await handleCreateTrainingItem(admin, user.id, params, requestId)
       case "delete-training-item":
         return await handleDeleteTrainingItem(admin, user.id, params, requestId)
+      case "reprocess-training-item":
+        return await handleReprocessTrainingItem(admin, user.id, params, requestId)
+      case "compile-prompt":
+        return await handleCompilePrompt(admin, user.id, params, requestId)
       default:
         return errorResponse(`Ação desconhecida: ${action}`, requestId, 400)
     }

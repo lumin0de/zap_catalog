@@ -66,6 +66,8 @@ export function AgentSettings({ agent, onUpdated }: AgentSettingsProps) {
         agentId: agent.id,
         ...settings,
       })
+      // Recompile prompt since config flags affect it
+      await callEdgeFunction("compile-prompt", { agentId: agent.id })
       onUpdated(res.agent)
       toast.success("Configuracoes salvas!")
     } catch (err) {

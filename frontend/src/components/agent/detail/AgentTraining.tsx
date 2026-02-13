@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from "react"
-import { Search, FileText, Globe, Video, File } from "lucide-react"
+import { Search, FileText, Globe, Video, File, Database } from "lucide-react"
 import { Input } from "@/components/ui/input"
 import { cn } from "@/lib/utils"
 import { callEdgeFunction } from "@/lib/api"
@@ -7,6 +7,8 @@ import { TrainingItemForm } from "./TrainingItemForm"
 import { DocumentUploadForm } from "./DocumentUploadForm"
 import { TrainingItemCard } from "./TrainingItemCard"
 import type { AgentTrainingItem, TrainingItemType } from "@/types/agent"
+
+const MAX_KNOWLEDGE_CHARS = 32_000
 
 interface AgentTrainingProps {
   agentId: string
@@ -51,6 +53,9 @@ export function AgentTraining({ agentId }: AgentTrainingProps) {
     setItems((prev) => prev.filter((i) => i.id !== id))
   }
 
+  const totalChars = items.reduce((sum, i) => sum + (i.char_count ?? 0), 0)
+  const usagePercent = Math.min(100, (totalChars / MAX_KNOWLEDGE_CHARS) * 100)
+
   const filtered = items.filter((item) => {
     const matchType = item.type === activeType
     const matchSearch =
@@ -73,6 +78,28 @@ export function AgentTraining({ agentId }: AgentTrainingProps) {
             placeholder="Buscar treinamento"
             className="pl-9"
           />
+        </div>
+      </div>
+
+      {/* Knowledge base usage bar */}
+      <div className="flex items-center justify-between rounded-lg border bg-muted/30 px-4 py-2.5">
+        <div className="flex items-center gap-2 text-sm text-muted-foreground">
+          <Database className="h-4 w-4" />
+          <span>Base de conhecimento</span>
+        </div>
+        <div className="flex items-center gap-3">
+          <span className="text-xs text-muted-foreground">
+            {totalChars.toLocaleString("pt-BR")} / {MAX_KNOWLEDGE_CHARS.toLocaleString("pt-BR")} caracteres
+          </span>
+          <div className="h-2 w-24 rounded-full bg-muted">
+            <div
+              className={cn(
+                "h-2 rounded-full transition-all",
+                usagePercent > 90 ? "bg-destructive" : usagePercent > 70 ? "bg-yellow-500" : "bg-primary",
+              )}
+              style={{ width: `${usagePercent}%` }}
+            />
+          </div>
         </div>
       </div>
 
@@ -136,6 +163,7 @@ export function AgentTraining({ agentId }: AgentTrainingProps) {
               key={item.id}
               item={item}
               onDeleted={handleDeleted}
+              onReprocessed={loadItems}
             />
           ))}
         </div>

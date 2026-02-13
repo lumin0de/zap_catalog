@@ -47,6 +47,7 @@ export function TrainingItemForm({
           content: content.trim(),
           title: title.trim() || undefined,
         },
+        45_000,
       )
       onCreated(res.item)
       setContent("")
@@ -104,7 +105,10 @@ export function TrainingItemForm({
           size="sm"
         >
           {saving ? (
-            <Loader2 className="h-4 w-4 animate-spin" />
+            <>
+              <Loader2 className="mr-1 h-4 w-4 animate-spin" />
+              Processando...
+            </>
           ) : (
             "Cadastrar"
           )}
