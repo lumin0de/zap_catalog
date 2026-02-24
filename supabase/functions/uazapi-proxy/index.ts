@@ -148,6 +148,19 @@ async function handleGetIntegrations(
   log(`rpc get-integrations (whatsapp+meli)`, now() - t0)
   if (whatsappRes.error) log(`rpc zc_get_whatsapp error: ${whatsappRes.error.message}`)
   if (meliRes.error) log(`rpc zc_get_meli error: ${meliRes.error.message}`)
+
+  // Proactive token refresh: if token expires in < 2h, refresh silently in background
+  const meliData = meliRes.data as Record<string, unknown> | null
+  if (meliData?.refresh_token && meliData?.token_expires_at) {
+    const expiresAt = new Date(meliData.token_expires_at as string)
+    const twoHours = 2 * 60 * 60 * 1000
+    if (expiresAt.getTime() - Date.now() < twoHours) {
+      ensureMeliToken(admin, userId).catch((e: Error) => {
+        log(`proactive meli token refresh failed: ${e.message}`)
+      })
+    }
+  }
+
   return jsonResponse({
     whatsapp: whatsappRes.data ?? null,
     meli: meliRes.data ?? null,
@@ -479,7 +492,16 @@ async function handleMeliExchange(
   if (!tokenRes.ok) {
     const errText = await tokenRes.text()
     console.error("[meli] Token exchange failed:", tokenRes.status, errText)
-    return errorResponse("Falha ao trocar código por tokens do Mercado Livre", requestId, 502)
+    let detail = ""
+    try {
+      const errJson = JSON.parse(errText)
+      detail = errJson.message ?? errJson.error ?? ""
+    } catch { /* ignore */ }
+    return errorResponse(
+      `Falha ao autenticar com o Mercado Livre${detail ? `: ${detail}` : ""}`,
+      requestId,
+      502,
+    )
   }
 
   const tokenData = await tokenRes.json()
@@ -527,6 +549,82 @@ async function handleMeliDisconnect(
   const { error } = await admin.rpc("zc_delete_meli", { p_user_id: userId })
   if (error) console.error("[meli] delete error:", error)
   return jsonResponse({ success: true })
+}
+
+async function handleMeliItems(
+  admin: ReturnType<typeof createClient>,
+  userId: string,
+  params: Record<string, unknown>,
+  requestId: string,
+) {
+  const { access_token, seller_id } = await ensureMeliToken(admin, userId)
+
+  const limit = Math.min(Number(params.limit ?? 50), 50)
+  const offset = Number(params.offset ?? 0)
+
+  const searchRes = await fetch(
+    `https://api.mercadolibre.com/users/${seller_id}/items/search?limit=${limit}&offset=${offset}`,
+    {
+      headers: {
+        Authorization: `Bearer ${access_token}`,
+        Accept: "application/json",
+        "User-Agent": "ZapCatalog/1.0",
+      },
+    },
+  )
+
+  if (!searchRes.ok) {
+    const errText = await searchRes.text()
+    console.error("[meli] items/search failed:", searchRes.status, errText)
+    return errorResponse(`Falha ao buscar itens do Mercado Livre: ${searchRes.status}`, requestId, 502)
+  }
+
+  const searchData = await searchRes.json()
+  const itemIds: string[] = searchData.results ?? []
+  const total: number = searchData.paging?.total ?? 0
+
+  if (itemIds.length === 0) {
+    return jsonResponse({ items: [], total, offset, limit })
+  }
+
+  // ML batch endpoint: up to 20 IDs per request
+  const allItems: unknown[] = []
+  const batchSize = 20
+  for (let i = 0; i < itemIds.length; i += batchSize) {
+    const batch = itemIds.slice(i, i + batchSize)
+    const detailsRes = await fetch(
+      `https://api.mercadolibre.com/items?ids=${batch.join(",")}`,
+      {
+        headers: {
+          Authorization: `Bearer ${access_token}`,
+          Accept: "application/json",
+          "User-Agent": "ZapCatalog/1.0",
+        },
+      },
+    )
+    if (!detailsRes.ok) continue
+    const detailsData = await detailsRes.json()
+    for (const entry of detailsData) {
+      if (entry.code === 200 && entry.body) {
+        const b = entry.body
+        allItems.push({
+          id: b.id,
+          title: b.title,
+          price: b.price,
+          currency_id: b.currency_id,
+          available_quantity: b.available_quantity,
+          sold_quantity: b.sold_quantity,
+          status: b.status,
+          thumbnail: b.thumbnail?.replace("http://", "https://"),
+          permalink: b.permalink,
+          category_id: b.category_id,
+          condition: b.condition,
+        })
+      }
+    }
+  }
+
+  return jsonResponse({ items: allItems, total, offset, limit })
 }
 
 // --- Knowledge Base: extraction + prompt compilation ---
@@ -1235,6 +1333,8 @@ Deno.serve(async (req) => {
         return await handleMeliExchange(admin, user.id, params, requestId)
       case "meli-disconnect":
         return await handleMeliDisconnect(admin, user.id)
+      case "meli-items":
+        return await handleMeliItems(admin, user.id, params, requestId)
       case "list-agents":
         return await handleListAgents(admin, user.id, requestId, log)
       case "get-agent":

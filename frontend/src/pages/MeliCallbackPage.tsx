@@ -20,6 +20,14 @@ export default function MeliCallbackPage() {
 
     const code = searchParams.get("code")
     const state = searchParams.get("state")
+    const mlError = searchParams.get("error")
+    const mlErrorDesc = searchParams.get("error_description")
+
+    if (mlError) {
+      setStatus("error")
+      setErrorMsg(mlErrorDesc ? `Mercado Livre: ${mlErrorDesc}` : `Erro do Mercado Livre: ${mlError}`)
+      return
+    }
 
     if (!code) {
       setStatus("error")

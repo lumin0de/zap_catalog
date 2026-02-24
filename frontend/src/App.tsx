@@ -13,6 +13,7 @@ import SettingsPage from "@/pages/SettingsPage"
 import MeliCallbackPage from "@/pages/MeliCallbackPage"
 import AgentWizardPage from "@/pages/AgentWizardPage"
 import AgentPage from "@/pages/AgentPage"
+import CatalogMeliPage from "@/pages/CatalogMeliPage"
 import NotFoundPage from "@/pages/NotFoundPage"
 
 const router = createBrowserRouter([
@@ -38,6 +39,7 @@ const router = createBrowserRouter([
               { index: true, element: <DashboardPage /> },
               { path: "settings", element: <SettingsPage /> },
               { path: "meli/callback", element: <MeliCallbackPage /> },
+              { path: "catalogo", element: <CatalogMeliPage /> },
               { path: "agent", element: <AgentPage /> },
             ],
           },

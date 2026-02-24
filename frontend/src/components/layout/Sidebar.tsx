@@ -1,15 +1,21 @@
 import { NavLink } from "react-router"
-import { LayoutDashboard, Settings, Bot } from "lucide-react"
+import { LayoutDashboard, Settings, Bot, ShoppingBag } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { Logo } from "@/components/common/Logo"
-
-const navItems = [
-  { to: "/app", label: "Dashboard", icon: LayoutDashboard, end: true },
-  { to: "/app/agent", label: "Agente IA", icon: Bot, end: false },
-  { to: "/app/settings", label: "Configurações", icon: Settings, end: false },
-]
+import { useAuth } from "@/contexts/AuthContext"
 
 export function Sidebar() {
+  const { meli } = useAuth()
+
+  const navItems = [
+    { to: "/app", label: "Dashboard", icon: LayoutDashboard, end: true },
+    { to: "/app/agent", label: "Agente IA", icon: Bot, end: false },
+    ...(meli?.is_connected
+      ? [{ to: "/app/catalogo", label: "Catálogo ML", icon: ShoppingBag, end: false }]
+      : []),
+    { to: "/app/settings", label: "Configurações", icon: Settings, end: false },
+  ]
+
   return (
     <aside className="hidden w-60 flex-col border-r bg-sidebar md:flex">
       <div className="flex h-16 items-center border-b px-4">

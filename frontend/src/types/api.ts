@@ -11,6 +11,7 @@ export type EdgeFunctionAction =
   | "delete"
   | "meli-exchange"
   | "meli-disconnect"
+  | "meli-items"
   | "list-agents"
   | "get-agent"
   | "create-agent"
