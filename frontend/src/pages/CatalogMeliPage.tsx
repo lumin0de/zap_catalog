@@ -6,7 +6,10 @@ import { Card, CardContent } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Skeleton } from "@/components/ui/skeleton"
-import { ShoppingBag, RefreshCw, ExternalLink, PackageOpen } from "lucide-react"
+import { ShoppingBag, RefreshCw, ExternalLink, PackageOpen, Bot, CheckCircle2 } from "lucide-react"
+import { toast } from "sonner"
+
+interface Agent { id: string; name: string; is_active: boolean }
 
 interface MeliItem {
   id: string
@@ -62,6 +65,33 @@ export default function CatalogMeliPage() {
   const [loadingMore, setLoadingMore] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [statusFilter, setStatusFilter] = useState<string>("all")
+  const [syncing, setSyncing] = useState(false)
+  const [lastSyncResult, setLastSyncResult] = useState<{ items: number; time: string } | null>(null)
+
+  const handleSyncToAgent = useCallback(async () => {
+    setSyncing(true)
+    try {
+      // Get first active agent
+      const agentsRes = await callEdgeFunction<{ agents: Agent[] }>("list-agents")
+      const activeAgent = agentsRes.agents.find((a) => a.is_active)
+      if (!activeAgent) {
+        toast.error("Nenhum agente ativo encontrado. Crie um agente primeiro.")
+        return
+      }
+      const res = await callEdgeFunction<{ success: boolean; items_synced: number }>(
+        "meli-sync-catalog",
+        { agentId: activeAgent.id },
+      )
+      if (res.success) {
+        setLastSyncResult({ items: res.items_synced, time: new Date().toLocaleTimeString("pt-BR") })
+        toast.success(`Catálogo sincronizado! ${res.items_synced} produtos enviados para o agente "${activeAgent.name}".`)
+      }
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Erro ao sincronizar catálogo")
+    } finally {
+      setSyncing(false)
+    }
+  }, [])
 
   const fetchItems = useCallback(async (currentOffset: number, append = false) => {
     if (append) setLoadingMore(true)
@@ -99,7 +129,7 @@ export default function CatalogMeliPage() {
         <ShoppingBag className="h-12 w-12 text-muted-foreground" />
         <p className="text-lg font-medium">Nenhuma conta do Mercado Livre conectada</p>
         <p className="text-sm text-muted-foreground">Conecte sua conta nas configurações para ver seu catálogo.</p>
-        <Button onClick={() => navigate("/app/settings?tab=meli")}>
+        <Button onClick={() => navigate("/app/integrations?tab=meli")}>
           Conectar Mercado Livre
         </Button>
       </div>
@@ -129,6 +159,31 @@ export default function CatalogMeliPage() {
         >
           <RefreshCw className={`mr-2 h-4 w-4 ${loading ? "animate-spin" : ""}`} />
           Atualizar
+        </Button>
+      </div>
+
+      {/* Sync to agent banner */}
+      <div className="flex flex-col gap-3 rounded-lg border bg-muted/40 p-4 sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex items-start gap-3">
+          <Bot className="mt-0.5 h-5 w-5 shrink-0 text-primary" />
+          <div>
+            <p className="text-sm font-medium">Sincronizar catálogo com o Agente IA</p>
+            <p className="text-xs text-muted-foreground">
+              O agente usará os produtos ativos para responder clientes no WhatsApp.
+              {lastSyncResult && (
+                <span className="ml-1 inline-flex items-center gap-1 text-primary">
+                  <CheckCircle2 className="h-3 w-3" />
+                  {lastSyncResult.items} produtos · às {lastSyncResult.time}
+                </span>
+              )}
+            </p>
+          </div>
+        </div>
+        <Button size="sm" onClick={handleSyncToAgent} disabled={syncing || loading}>
+          {syncing
+            ? <RefreshCw className="mr-2 h-4 w-4 animate-spin" />
+            : <Bot className="mr-2 h-4 w-4" />}
+          {syncing ? "Sincronizando..." : "Sincronizar no Agente"}
         </Button>
       </div>
 
@@ -169,7 +224,7 @@ export default function CatalogMeliPage() {
           {Array.from({ length: 8 }).map((_, i) => (
             <Card key={i}>
               <CardContent className="p-3">
-                <Skeleton className="mb-3 aspect-square w-full rounded-md" />
+                <Skeleton className="mb-3 h-28 w-full rounded-md" />
                 <Skeleton className="mb-1 h-4 w-3/4" />
                 <Skeleton className="h-3 w-1/2" />
               </CardContent>
@@ -185,14 +240,16 @@ export default function CatalogMeliPage() {
             <Card key={item.id} className="overflow-hidden transition-shadow hover:shadow-md">
               <CardContent className="p-0">
                 {item.thumbnail ? (
-                  <img
-                    src={item.thumbnail}
-                    alt={item.title}
-                    className="aspect-square w-full object-contain bg-muted"
-                    loading="lazy"
-                  />
+                  <div className="flex min-h-24 max-h-32 w-full items-center justify-center bg-muted p-2">
+                    <img
+                      src={item.thumbnail}
+                      alt={item.title}
+                      className="max-h-28 w-auto max-w-full object-contain"
+                      loading="lazy"
+                    />
+                  </div>
                 ) : (
-                  <div className="flex aspect-square w-full items-center justify-center bg-muted">
+                  <div className="flex h-28 w-full items-center justify-center bg-muted">
                     <ShoppingBag className="h-8 w-8 text-muted-foreground/40" />
                   </div>
                 )}

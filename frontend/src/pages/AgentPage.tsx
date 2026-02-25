@@ -11,6 +11,7 @@ import { callEdgeFunction } from "@/lib/api"
 import { AgentProfile } from "@/components/agent/detail/AgentProfile"
 import { AgentTraining } from "@/components/agent/detail/AgentTraining"
 import { AgentSettings } from "@/components/agent/detail/AgentSettings"
+import { AgentConversations } from "@/components/agent/detail/AgentConversations"
 import type { Agent } from "@/types/agent"
 
 export default function AgentPage() {
@@ -81,6 +82,7 @@ export default function AgentPage() {
         <TabsList>
           <TabsTrigger value="perfil">Perfil</TabsTrigger>
           <TabsTrigger value="treinamentos">Treinamentos</TabsTrigger>
+          <TabsTrigger value="conversas">Conversas</TabsTrigger>
           <TabsTrigger value="configuracoes">Configuracoes</TabsTrigger>
         </TabsList>
 
@@ -94,6 +96,10 @@ export default function AgentPage() {
 
         <TabsContent value="treinamentos" className="mt-6">
           <AgentTraining agentId={agent.id} />
+        </TabsContent>
+
+        <TabsContent value="conversas" className="mt-6">
+          <AgentConversations agentId={agent.id} />
         </TabsContent>
 
         <TabsContent value="configuracoes" className="mt-6">

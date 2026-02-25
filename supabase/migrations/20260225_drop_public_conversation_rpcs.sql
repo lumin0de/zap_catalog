@@ -1,0 +1,6 @@
+-- ============================================================
+-- NOTE: These public-schema functions are now intentionally kept.
+-- They are required by the uazapi-proxy edge function which cannot
+-- call zapcatalog-schema RPCs via Supabase PostgREST.
+-- This file is a no-op kept only for migration history continuity.
+-- ============================================================

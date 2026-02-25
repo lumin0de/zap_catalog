@@ -19,6 +19,7 @@ export interface Agent {
   timezone: string
   response_time: string
   interaction_limit: number
+  ai_model: string
   is_active: boolean
   system_prompt: string
   system_prompt_updated_at: string | null

@@ -1,5 +1,5 @@
 import { NavLink } from "react-router"
-import { LayoutDashboard, Settings, Bot, ShoppingBag } from "lucide-react"
+import { LayoutDashboard, Settings, Bot, ShoppingBag, Plug } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { Logo } from "@/components/common/Logo"
 import { useAuth } from "@/contexts/AuthContext"
@@ -13,6 +13,7 @@ export function Sidebar() {
     ...(meli?.is_connected
       ? [{ to: "/app/catalogo", label: "Catálogo ML", icon: ShoppingBag, end: false }]
       : []),
+    { to: "/app/integrations", label: "Integrações", icon: Plug, end: false },
     { to: "/app/settings", label: "Configurações", icon: Settings, end: false },
   ]
 

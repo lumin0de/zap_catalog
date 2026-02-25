@@ -1,39 +1,24 @@
 import { useState } from "react"
-import { useForm } from "react-hook-form"
-import { zodResolver } from "@hookform/resolvers/zod"
 import { useAuth } from "@/contexts/AuthContext"
 import { callEdgeFunction } from "@/lib/api"
-import { webhookSchema, type WebhookFormData } from "@/lib/validators"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
-import { Input } from "@/components/ui/input"
-import { Label } from "@/components/ui/label"
-import { Loader2, Webhook } from "lucide-react"
+import { Badge } from "@/components/ui/badge"
+import { Loader2, Webhook, CheckCircle2, AlertCircle } from "lucide-react"
 import { toast } from "sonner"
 
 export function WebhooksTab() {
   const { whatsapp, refreshIntegrations } = useAuth()
   const [loading, setLoading] = useState(false)
 
-  const {
-    register,
-    handleSubmit,
-    formState: { errors },
-  } = useForm<WebhookFormData>({
-    resolver: zodResolver(webhookSchema),
-    defaultValues: {
-      webhookUrl: whatsapp?.webhook_url ?? "",
-    },
-  })
-
-  const onSubmit = async (data: WebhookFormData) => {
+  const handleReconfigure = async () => {
     setLoading(true)
     try {
-      await callEdgeFunction("webhook", { webhookUrl: data.webhookUrl })
+      await callEdgeFunction("webhook", {})
       await refreshIntegrations()
-      toast.success("Webhook atualizado!")
+      toast.success("Webhook reconfigurado com sucesso!")
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Erro ao salvar webhook")
+      toast.error(err instanceof Error ? err.message : "Erro ao reconfigurar webhook")
     } finally {
       setLoading(false)
     }
@@ -43,57 +28,57 @@ export function WebhooksTab() {
     return (
       <Card>
         <CardHeader>
-          <CardTitle>Configuração de Webhooks</CardTitle>
-          <CardDescription>Configure onde os eventos do WhatsApp serão enviados</CardDescription>
+          <CardTitle>Webhook do Agente</CardTitle>
+          <CardDescription>Integração automática de mensagens via WhatsApp</CardDescription>
         </CardHeader>
         <CardContent className="flex flex-col items-center gap-4 py-8">
           <div className="flex h-16 w-16 items-center justify-center rounded-full bg-muted">
             <Webhook className="h-8 w-8 text-muted-foreground" />
           </div>
           <p className="text-sm text-muted-foreground">
-            Conecte o WhatsApp primeiro para configurar webhooks.
+            Conecte o WhatsApp primeiro para ativar o agente.
           </p>
         </CardContent>
       </Card>
     )
   }
 
+  const isActive = !!(whatsapp.webhook_url && whatsapp.webhook_enabled)
+
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Configuração de Webhooks</CardTitle>
+        <CardTitle>Webhook do Agente</CardTitle>
         <CardDescription>
-          Configure a URL que receberá os eventos do WhatsApp em tempo real
+          O agente recebe e responde mensagens automaticamente via WhatsApp.
         </CardDescription>
       </CardHeader>
-      <CardContent>
-        <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
-          <div className="space-y-2">
-            <Label htmlFor="webhookUrl">URL do Webhook</Label>
-            <Input
-              id="webhookUrl"
-              placeholder="https://sua-api.com/webhook"
-              {...register("webhookUrl")}
-            />
-            {errors.webhookUrl && (
-              <p className="text-sm text-destructive">{errors.webhookUrl.message}</p>
-            )}
+      <CardContent className="space-y-4">
+        <div className="flex items-center gap-3 rounded-lg border p-4">
+          {isActive ? (
+            <CheckCircle2 className="h-5 w-5 shrink-0 text-green-500" />
+          ) : (
+            <AlertCircle className="h-5 w-5 shrink-0 text-yellow-500" />
+          )}
+          <div className="flex-1">
+            <p className="text-sm font-medium">
+              {isActive ? "Webhook ativo" : "Webhook não configurado"}
+            </p>
             <p className="text-xs text-muted-foreground">
-              Os eventos serão enviados via POST para esta URL.
+              {isActive
+                ? "O agente está recebendo mensagens e respondendo automaticamente."
+                : "Clique em Configurar para ativar o agente."}
             </p>
           </div>
+          <Badge variant={isActive ? "default" : "secondary"}>
+            {isActive ? "Ativo" : "Inativo"}
+          </Badge>
+        </div>
 
-          {whatsapp.webhook_url && whatsapp.webhook_enabled && (
-            <div className="rounded-md bg-secondary p-3 text-sm text-secondary-foreground">
-              Webhook ativo: {whatsapp.webhook_url}
-            </div>
-          )}
-
-          <Button type="submit" disabled={loading}>
-            {loading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-            Salvar configuração
-          </Button>
-        </form>
+        <Button onClick={handleReconfigure} disabled={loading} variant="outline">
+          {loading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+          {isActive ? "Reconfigurar webhook" : "Configurar webhook"}
+        </Button>
       </CardContent>
     </Card>
   )

@@ -12,6 +12,7 @@ import {
   Timer,
   Hash,
   Loader2,
+  Bot,
 } from "lucide-react"
 import { Switch } from "@/components/ui/switch"
 import { Badge } from "@/components/ui/badge"
@@ -53,6 +54,7 @@ export function AgentSettings({ agent, onUpdated }: AgentSettingsProps) {
     timezone: agent.timezone,
     responseTime: agent.response_time,
     interactionLimit: agent.interaction_limit,
+    aiModel: agent.ai_model ?? "gpt-4o-mini",
   })
 
   const toggle = (key: keyof typeof settings) => {
@@ -297,6 +299,31 @@ export function AgentSettings({ agent, onUpdated }: AgentSettingsProps) {
                 <SelectItem value="10">10 interacoes</SelectItem>
                 <SelectItem value="20">20 interacoes</SelectItem>
                 <SelectItem value="50">50 interacoes</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+
+          {/* AI Model */}
+          <div className="flex items-center gap-4 rounded-lg px-2 py-3">
+            <Bot className="h-5 w-5 shrink-0 text-muted-foreground" />
+            <div className="flex-1">
+              <p className="text-sm font-medium">Modelo de IA</p>
+              <p className="text-xs text-muted-foreground">
+                Modelo OpenAI usado para gerar as respostas do agente.
+              </p>
+            </div>
+            <Select
+              value={settings.aiModel}
+              onValueChange={(val) =>
+                setSettings((prev) => ({ ...prev, aiModel: val }))
+              }
+            >
+              <SelectTrigger className="w-56">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="gpt-4o-mini">GPT-4o Mini (padrao)</SelectItem>
+                <SelectItem value="gpt-4.1-mini">GPT-4.1 Mini</SelectItem>
               </SelectContent>
             </Select>
           </div>

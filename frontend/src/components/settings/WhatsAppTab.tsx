@@ -5,7 +5,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Button } from "@/components/ui/button"
 import { StatusBadge } from "@/components/whatsapp/StatusBadge"
 import { ConnectModal } from "@/components/whatsapp/ConnectModal"
-import { Loader2, MessageSquare, RefreshCw, Trash2, Unplug, Link } from "lucide-react"
+import { Loader2, MessageSquare, RefreshCw, Trash2, Unplug, Link, Webhook, CheckCircle2, AlertCircle } from "lucide-react"
 import {
   Dialog,
   DialogContent,
@@ -24,6 +24,20 @@ export function WhatsAppTab() {
   const [statusLoading, setStatusLoading] = useState(false)
   const [deleteLoading, setDeleteLoading] = useState(false)
   const [disconnectLoading, setDisconnectLoading] = useState(false)
+  const [webhookLoading, setWebhookLoading] = useState(false)
+
+  const handleConfigureWebhook = async () => {
+    setWebhookLoading(true)
+    try {
+      await callEdgeFunction("webhook")
+      await refreshIntegrations()
+      toast.success("Webhook configurado! O agente já pode responder mensagens.")
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Erro ao configurar webhook")
+    } finally {
+      setWebhookLoading(false)
+    }
+  }
 
   const handleCheckStatus = async () => {
     setStatusLoading(true)
@@ -111,21 +125,58 @@ export function WhatsAppTab() {
               <span className="text-muted-foreground">Status</span>
               <StatusBadge connected={whatsapp.is_connected} />
             </div>
-            <div className="flex items-center justify-between">
-              <span className="text-muted-foreground">Instância</span>
-              <span className="font-mono text-xs">{whatsapp.instance_name}</span>
-            </div>
-            {whatsapp.webhook_url && (
+            {whatsapp.phone_number && (
               <div className="flex items-center justify-between">
-                <span className="text-muted-foreground">Webhook</span>
-                <span className="max-w-[250px] truncate font-mono text-xs">
-                  {whatsapp.webhook_url}
-                </span>
+                <span className="text-muted-foreground">Número</span>
+                <span className="font-medium">+{whatsapp.phone_number}</span>
               </div>
             )}
+            <div className="flex items-center justify-between">
+              <span className="text-muted-foreground">Webhook do agente</span>
+              {whatsapp.webhook_url ? (
+                <span className="flex items-center gap-1 text-xs text-green-600 font-medium">
+                  <CheckCircle2 className="h-3.5 w-3.5" />
+                  Configurado
+                </span>
+              ) : (
+                <span className="flex items-center gap-1 text-xs text-destructive font-medium">
+                  <AlertCircle className="h-3.5 w-3.5" />
+                  Não configurado
+                </span>
+              )}
+            </div>
           </div>
 
+          {!whatsapp.webhook_url && whatsapp.is_connected && (
+            <div className="rounded-md border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive">
+              <p className="font-medium">Webhook não configurado</p>
+              <p className="text-xs mt-0.5 text-destructive/80">
+                O agente não consegue receber mensagens do WhatsApp sem o webhook ativo.
+              </p>
+            </div>
+          )}
+
           <div className="flex flex-wrap gap-2">
+            {whatsapp.is_connected && !whatsapp.webhook_url && (
+              <Button size="sm" onClick={handleConfigureWebhook} disabled={webhookLoading}>
+                {webhookLoading ? (
+                  <Loader2 className="mr-2 h-3 w-3 animate-spin" />
+                ) : (
+                  <Webhook className="mr-2 h-3 w-3" />
+                )}
+                Configurar Webhook
+              </Button>
+            )}
+            {whatsapp.is_connected && whatsapp.webhook_url && (
+              <Button variant="outline" size="sm" onClick={handleConfigureWebhook} disabled={webhookLoading}>
+                {webhookLoading ? (
+                  <Loader2 className="mr-2 h-3 w-3 animate-spin" />
+                ) : (
+                  <Webhook className="mr-2 h-3 w-3" />
+                )}
+                Reconfigurar Webhook
+              </Button>
+            )}
             <Button variant="outline" size="sm" onClick={handleCheckStatus} disabled={statusLoading}>
               {statusLoading ? (
                 <Loader2 className="mr-2 h-3 w-3 animate-spin" />

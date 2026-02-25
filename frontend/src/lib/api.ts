@@ -64,18 +64,22 @@ export async function callEdgeFunction<T = unknown>(
   if (error) {
     let message = (error as { message?: string }).message ?? "Edge function call failed"
     let requestId: string | undefined
+    // supabase-js v2 includes the parsed error body in `data` even for non-2xx responses
+    if (data && typeof data === "object") {
+      const d = data as Record<string, unknown>
+      if ("error" in d && typeof d.error === "string") message = d.error
+      if ("request_id" in d && typeof d.request_id === "string") requestId = d.request_id
+    }
+    // Fallback: try error.context (older supabase-js behavior)
     try {
       const ctx = (error as Record<string, unknown>).context
-      if (ctx && typeof ctx === "object") {
+      if (ctx && typeof ctx === "object" && !("json" in ctx)) {
         const obj = ctx as Record<string, unknown>
         if ("error" in obj && typeof obj.error === "string") message = obj.error
         if ("request_id" in obj && typeof obj.request_id === "string") requestId = obj.request_id
       }
     } catch {
       // ignore
-    }
-    if (data && typeof data === "object" && "request_id" in data) {
-      requestId = (data as Record<string, string>).request_id
     }
     console.error(`[callEdgeFunction] action=${action} error=`, message, requestId ? `request_id=${requestId}` : "")
     const err = new Error(message) as CallEdgeFunctionError

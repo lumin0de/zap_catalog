@@ -161,6 +161,20 @@ async function handleGetIntegrations(
     }
   }
 
+  // Auto-configure webhook if whatsapp is connected but webhook not set yet
+  const whatsappData = whatsappRes.data as Record<string, unknown> | null
+  if (whatsappData?.is_connected && !whatsappData?.webhook_url && whatsappData?.instance_token) {
+    const webhookUrl = `${SUPABASE_URL}/functions/v1/uazapi-proxy`
+    fetch(`${UAZAPI_BASE_URL}/webhook`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", token: whatsappData.instance_token as string },
+      body: JSON.stringify(buildWebhookBody(webhookUrl)),
+    }).then(() => admin.rpc("zc_update_whatsapp_webhook", {
+      p_user_id: userId,
+      p_webhook_url: webhookUrl,
+    })).catch((e: Error) => log(`auto-webhook setup failed: ${e.message}`))
+  }
+
   return jsonResponse({
     whatsapp: whatsappRes.data ?? null,
     meli: meliRes.data ?? null,
@@ -225,6 +239,22 @@ async function handleInit(
 
   if (error) return jsonResponse({ error: error.message }, 500)
 
+  // Auto-configure UAZAPI webhook to point back to this edge function
+  const webhookUrl = `${SUPABASE_URL}/functions/v1/uazapi-proxy`
+  try {
+    await fetch(`${UAZAPI_BASE_URL}/webhook`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", token: instanceToken },
+      body: JSON.stringify(buildWebhookBody(webhookUrl)),
+    })
+    await admin.rpc("zc_update_whatsapp_webhook", {
+      p_user_id: userId,
+      p_webhook_url: webhookUrl,
+    })
+  } catch {
+    // Non-fatal: webhook setup failure doesn't block instance creation
+  }
+
   return jsonResponse({
     instance_name: resolvedName,
     instance_token: instanceToken,
@@ -246,7 +276,7 @@ async function handleConnect(
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      Token: whatsapp.instance_token,
+      token: whatsapp.instance_token,
     },
     body: JSON.stringify({}),
   })
@@ -290,7 +320,7 @@ async function handleStatus(
 
   const uazapiRes = await fetch(`${UAZAPI_BASE_URL}/instance/status`, {
     method: "GET",
-    headers: { Token: whatsapp.instance_token },
+    headers: { token: whatsapp.instance_token },
   })
 
   if (!uazapiRes.ok) {
@@ -309,17 +339,48 @@ async function handleStatus(
     p_is_connected: isConnected,
   })
 
+  // Persist owner phone number for webhook fallback lookup
+  const phoneNumber = (data.instance?.owner ?? data.phone_number ?? data.phoneNumber ?? "") as string
+  if (phoneNumber) {
+    try {
+      await admin.rpc("zc_update_whatsapp_phone", {
+        p_user_id: userId,
+        p_phone_number: phoneNumber,
+      })
+    } catch {
+      // non-fatal
+    }
+  }
+
   return jsonResponse({
     connected: isConnected,
-    phone_number: data.instance?.owner ?? data.phone_number ?? data.phoneNumber ?? "",
+    phone_number: phoneNumber,
     name: data.instance?.profileName ?? data.name ?? data.pushName ?? "",
   })
+}
+
+// Builds the correct webhook config body for UAZAPI Go
+// events and excludeMessages must be arrays ([]string in Go struct)
+// Send both habilitado (lowercase) and Habilitado (PascalCase) — Go struct json tag may vary
+function buildWebhookBody(webhookUrl: string) {
+  return {
+    enabled:             true,
+    habilitado:          true,
+    Habilitado:          true,
+    url:                 webhookUrl,
+    sendToken:           true,
+    events:              ["messages"],
+    excludeMessages:     ["wasSentByApi", "isGroupYes"],
+    addUrlEvents:        false,
+    addUrlTypesMessages: false,
+  }
 }
 
 async function handleWebhook(
   admin: ReturnType<typeof createClient>,
   userId: string,
   params: Record<string, unknown>,
+  requestId: string,
 ) {
   const { data: whatsapp } = await admin.rpc("zc_get_whatsapp", {
     p_user_id: userId,
@@ -328,19 +389,64 @@ async function handleWebhook(
     return jsonResponse({ error: "Nenhuma instância WhatsApp" }, 404)
   }
 
-  const webhookUrl = params.webhookUrl as string
-  const uazapiRes = await fetch(`${UAZAPI_BASE_URL}/webhook`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Token: whatsapp.instance_token,
-    },
-    body: JSON.stringify({ webhook_url: webhookUrl }),
-  })
+  const instanceToken = whatsapp.instance_token as string
+  // Webhook URL is always the internal edge function — no user input needed (multi-tenant safe)
+  const webhookUrl = `${SUPABASE_URL}/functions/v1/uazapi-proxy`
+  const body = buildWebhookBody(webhookUrl)
+
+  // Step 1: GET current webhook config — reveals existing ID and exact schema
+  let existingId: string | null = null
+  try {
+    const getRes = await fetch(`${UAZAPI_BASE_URL}/webhook`, {
+      method: "GET",
+      headers: { token: instanceToken },
+    })
+    if (getRes.ok) {
+      const current = await getRes.json()
+      console.log(`[${requestId}] webhook GET: ${JSON.stringify(current).substring(0, 400)}`)
+      // Extract ID — may be array or object, field may be "id" or "Id"
+      const first = Array.isArray(current) ? current[0] : current
+      existingId = first?.id ?? first?.Id ?? first?.ID ?? null
+    } else {
+      console.log(`[${requestId}] webhook GET ${getRes.status}: ${await getRes.text()}`)
+    }
+  } catch (e) {
+    console.log(`[${requestId}] webhook GET error: ${e}`)
+  }
+
+  // Step 2: PUT existing or POST new
+  let uazapiRes: Response
+  if (existingId) {
+    console.log(`[${requestId}] webhook PUT id=${existingId}`)
+    uazapiRes = await fetch(`${UAZAPI_BASE_URL}/webhook/${existingId}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json", token: instanceToken },
+      body: JSON.stringify(body),
+    })
+    // Fallback to POST if PUT not supported
+    if (!uazapiRes.ok) {
+      const putErr = await uazapiRes.text()
+      console.log(`[${requestId}] webhook PUT failed ${uazapiRes.status} ${putErr} — trying POST`)
+      uazapiRes = await fetch(`${UAZAPI_BASE_URL}/webhook`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", token: instanceToken },
+        body: JSON.stringify(body),
+      })
+    }
+  } else {
+    console.log(`[${requestId}] webhook POST (no existing ID)`)
+    uazapiRes = await fetch(`${UAZAPI_BASE_URL}/webhook`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", token: instanceToken },
+      body: JSON.stringify(body),
+    })
+  }
+
+  const resText = await uazapiRes.text()
+  console.log(`[${requestId}] webhook set response: ${uazapiRes.status} ${resText.substring(0, 400)}`)
 
   if (!uazapiRes.ok) {
-    const err = await uazapiRes.text()
-    return jsonResponse({ error: `Falha ao configurar webhook: ${err}` }, 502)
+    return jsonResponse({ error: `Falha ao configurar webhook: ${resText}` }, 502)
   }
 
   await admin.rpc("zc_update_whatsapp_webhook", {
@@ -348,7 +454,7 @@ async function handleWebhook(
     p_webhook_url: webhookUrl,
   })
 
-  return jsonResponse({ success: true })
+  return jsonResponse({ success: true, webhook_url: webhookUrl })
 }
 
 async function handleDisconnect(
@@ -627,6 +733,147 @@ async function handleMeliItems(
   return jsonResponse({ items: allItems, total, offset, limit })
 }
 
+async function handleMeliSyncCatalog(
+  admin: ReturnType<typeof createClient>,
+  userId: string,
+  params: Record<string, unknown>,
+  requestId: string,
+) {
+  const agentId = params.agentId as string
+  if (!agentId) return errorResponse("agentId e obrigatorio", requestId, 400)
+
+  const { access_token, seller_id } = await ensureMeliToken(admin, userId)
+  console.log(`[${requestId}] meli-sync seller_id=${seller_id}`)
+
+  // Fetch all items (up to 200), filter by status client-side
+  interface CatalogItem {
+    id: string; title: string; price: number; currency_id: string
+    available_quantity: number; permalink: string | null; status: string
+  }
+  const allItems: CatalogItem[] = []
+  let fetchOffset = 0
+  let fetchTotal = Infinity
+  let totalIdsFound = 0
+  let searchError: string | null = null
+
+  while (fetchOffset < fetchTotal && fetchOffset < 200) {
+    const searchRes = await fetch(
+      `https://api.mercadolibre.com/users/${seller_id}/items/search?limit=50&offset=${fetchOffset}`,
+      { headers: { Authorization: `Bearer ${access_token}`, Accept: "application/json", "User-Agent": "ZapCatalog/1.0" } },
+    )
+    if (!searchRes.ok) {
+      const errText = await searchRes.text()
+      searchError = `ML items/search ${searchRes.status}: ${errText}`
+      console.error(`[${requestId}] ${searchError}`)
+      break
+    }
+    const searchData = await searchRes.json()
+    fetchTotal = searchData.paging?.total ?? 0
+    const ids: string[] = searchData.results ?? []
+    console.log(`[${requestId}] meli-sync page offset=${fetchOffset} total=${fetchTotal} ids=${ids.length}`)
+    if (ids.length === 0) break
+    totalIdsFound += ids.length
+
+    for (let i = 0; i < ids.length; i += 20) {
+      const batch = ids.slice(i, i + 20)
+      const detRes = await fetch(
+        `https://api.mercadolibre.com/items?ids=${batch.join(",")}`,
+        { headers: { Authorization: `Bearer ${access_token}`, Accept: "application/json", "User-Agent": "ZapCatalog/1.0" } },
+      )
+      if (!detRes.ok) {
+        console.error(`[${requestId}] meli-sync items batch failed: ${detRes.status}`)
+        continue
+      }
+      const detData = await detRes.json()
+      for (const entry of detData) {
+        if (entry.code === 200 && entry.body) {
+          const b = entry.body
+          console.log(`[${requestId}] meli-sync item=${b.id} status=${b.status}`)
+          // Include all non-deleted items so agent knows full catalog
+          if (b.status !== "deleted") {
+            // Extract useful attributes (color, size, brand, etc.)
+          const attrMap: Record<string, string> = {}
+          const USEFUL_ATTRS = ["COLOR", "SIZE", "BRAND", "MATERIAL", "GENDER", "AGE_GROUP", "MODEL"]
+          for (const attr of (b.attributes ?? []) as Array<{ id: string; value_name: string | null }>) {
+            if (USEFUL_ATTRS.includes(attr.id) && attr.value_name) {
+              attrMap[attr.id] = attr.value_name
+            }
+          }
+          allItems.push({ id: b.id, title: b.title, price: b.price, currency_id: b.currency_id, available_quantity: b.available_quantity, permalink: b.permalink, status: b.status, attributes: attrMap })
+          }
+        }
+      }
+    }
+    fetchOffset += ids.length
+  }
+
+  console.log(`[${requestId}] meli-sync totalIds=${totalIdsFound} synced=${allItems.length}`)
+
+  if (allItems.length === 0) {
+    const detail = searchError
+      ? `Erro ao buscar itens: ${searchError}`
+      : totalIdsFound === 0
+        ? "Nenhum item encontrado na sua conta do Mercado Livre."
+        : `${totalIdsFound} itens encontrados mas nenhum com status ativo ou pausado.`
+    return errorResponse(detail, requestId, 404)
+  }
+
+  // Build readable catalog text
+  const syncDate = new Date().toLocaleDateString("pt-BR")
+  const fmtBRL = (n: number) => new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" }).format(n)
+  let catalogText = `CATALOGO DE PRODUTOS - Atualizado em ${syncDate}\nTotal de produtos: ${allItems.length}\n\n`
+  const ATTR_LABELS: Record<string, string> = {
+    COLOR: "Cor", SIZE: "Tamanho", BRAND: "Marca", MATERIAL: "Material",
+    GENDER: "Genero", AGE_GROUP: "Faixa etaria", MODEL: "Modelo",
+  }
+  for (const item of allItems) {
+    catalogText += `---\nProduto: ${item.title}\nPreco: ${fmtBRL(item.price)}\n`
+    const attrs = item.attributes as Record<string, string> | undefined
+    if (attrs) {
+      for (const [key, val] of Object.entries(attrs)) {
+        catalogText += `${ATTR_LABELS[key] ?? key}: ${val}\n`
+      }
+    }
+    if (item.permalink) catalogText += `Link: ${item.permalink}\n`
+    catalogText += "\n"
+  }
+
+  const CATALOG_TITLE = "Catalogo Mercado Livre"
+
+  // Remove existing catalog training item (replace strategy)
+  const { data: existingItems } = await admin.rpc("zc_list_training_items", {
+    p_user_id: userId, p_agent_id: agentId,
+  })
+  const existing = ((existingItems ?? []) as Array<{ id: string; title: string }>)
+    .find((i) => i.title === CATALOG_TITLE)
+  if (existing) {
+    await admin.rpc("zc_delete_training_item", { p_user_id: userId, p_training_item_id: existing.id })
+  }
+
+  // Create new training item
+  const { data: newItem, error: createErr } = await admin.rpc("zc_create_training_item", {
+    p_user_id: userId, p_agent_id: agentId, p_type: "texto",
+    p_content: catalogText, p_title: CATALOG_TITLE, p_processing_status: "processing",
+  })
+  if (createErr) return errorResponse(createErr.message, requestId, 500)
+
+  // Mark done immediately (plain text, no extraction needed)
+  await admin.rpc("zc_update_training_item_content", {
+    p_user_id: userId, p_training_item_id: newItem.id,
+    p_extracted_content: catalogText, p_processing_status: "done",
+    p_processing_error: null, p_char_count: catalogText.length,
+  })
+
+  // Generate and store embedding for RAG
+  await storeTrainingItemEmbedding(admin, userId, newItem.id, catalogText, requestId)
+
+  // Recompile system prompt with new catalog
+  await recompileSystemPrompt(admin, userId, agentId, requestId)
+
+  console.log(`[${requestId}] meli catalog synced: ${allItems.length} items, ${catalogText.length} chars`)
+  return jsonResponse({ success: true, items_synced: allItems.length, chars: catalogText.length })
+}
+
 // --- Knowledge Base: extraction + prompt compilation ---
 
 function htmlToText(html: string): string {
@@ -834,13 +1081,46 @@ function compileSystemPrompt(
   }
   rules.push("- Responda sempre em portugues brasileiro.")
   rules.push("- Seja educado, profissional e objetivo.")
+  rules.push(
+    "- JAMAIS invente, infira ou mencione produtos, servicos, precos, disponibilidade ou qualquer informacao que nao esteja EXPLICITAMENTE listada na Base de Conhecimento abaixo. Se nao estiver la, responda: \"Nao temos essa informacao no momento.\"",
+  )
+  rules.push(
+    "- A Base de Conhecimento abaixo e a UNICA fonte de verdade. Voce nao tem acesso a nenhuma outra informacao sobre produtos ou servicos alem do que esta listado la.",
+  )
+  rules.push(
+    "- FORMATACAO WHATSAPP: Para negrito use *texto* (asterisco simples). NUNCA use **texto** (duplo asterisco). Para links use o formato: Link: URL — NUNCA use markdown [texto](URL).",
+  )
+  rules.push(
+    "- FORMATACAO DE LISTA: Ao mencionar produtos, cite apenas o nome e, quando relevante, o preco. Nao despeje todos os atributos (cor, tamanho, marca etc.) sem o cliente pedir. Exiba esses detalhes somente se o cliente perguntar ou se for essencial para ajuda-lo.",
+  )
+  rules.push(
+    "- Limite de listagem: mostre NO MAXIMO 5 produtos por mensagem. Se houver mais, pergunte o que o cliente busca especificamente antes de listar.",
+  )
 
   sections.push(`\n## Regras de comportamento\n${rules.join("\n")}`)
 
+  // Sales-specific behavior (only when objective is "vendas")
+  if (agent.objective === "vendas") {
+    sections.push(`\n## Missao e postura de vendas
+Voce e um assistente de vendas conectado diretamente ao catalogo atualizado do Mercado Livre do vendedor. Sua missao e ajudar o cliente a encontrar e comprar o produto certo. Voce NAO finaliza compras — ao final, voce encaminha o link do produto para o cliente continuar a compra no Mercado Livre.
+
+RESTRICAO ABSOLUTA: mencione apenas produtos existentes na Base de Conhecimento. Nao invente nem sugira produtos fora do catalogo.
+
+### Como conduzir o atendimento:
+1. ENTENDA antes de listar: faca perguntas para descobrir o que o cliente precisa (ex: "Voce tem alguma preferencia de cor ou tamanho?"). Nao despeje o catalogo inteiro de cara.
+2. APRESENTE de forma simples: ao sugerir um produto, mencione apenas o nome e o preco. Diga "temos o *[nome]* por R$ XX,XX" — sem listar todos os atributos de uma vez.
+3. DETALHE quando perguntado: so informe cor, tamanho, marca, etc. se o cliente perguntar ou se for o criterio de busca dele.
+4. VERIFIQUE a disponibilidade: se o cliente pedir algo que nao existe no catalogo, diga claramente que nao temos e ofeca a opcao mais proxima disponivel (se houver).
+5. CONVERTA com o link: quando o cliente demonstrar interesse, encaminhe o link do produto assim: "Segue o link para finalizar sua compra: [URL]". Nao use markdown — so a URL pura ou "Link: URL".
+6. Seja consultivo, direto e humano. Mensagens curtas funcionam melhor no WhatsApp. Nunca pressione o cliente.`)
+  }
+
   // Knowledge base
   if (trainingItems.length > 0) {
-    sections.push("\n## Base de conhecimento")
-    sections.push("Use as informacoes abaixo para responder as perguntas dos usuarios:\n")
+    sections.push("\n## Base de Conhecimento (LISTA OFICIAL COMPLETA)")
+    sections.push(
+      "ATENCAO: Os itens abaixo representam a TOTALIDADE dos produtos e informacoes disponíveis nesta empresa. NAO EXISTEM outros produtos ou informacoes alem dos listados aqui. Responda SOMENTE com base nestes dados:\n",
+    )
 
     let totalChars = sections.join("\n").length
     for (const item of trainingItems) {
@@ -862,6 +1142,10 @@ function compileSystemPrompt(
       sections.push(itemBlock)
       totalChars += itemBlock.length
     }
+  } else {
+    sections.push(
+      "\n## Base de Conhecimento\nNENHUM produto ou informacao cadastrado ainda. Informe ao cliente que o catalogo ainda nao foi configurado.",
+    )
   }
 
   return sections.join("\n")
@@ -908,7 +1192,97 @@ async function recompileSystemPrompt(
   }
 }
 
+// --- RAG: embedding helpers ---
+
+async function generateEmbedding(text: string, requestId: string): Promise<number[] | null> {
+  try {
+    const res = await fetch("https://api.openai.com/v1/embeddings", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${OPENAI_API_KEY}` },
+      body: JSON.stringify({
+        model: "text-embedding-3-small",
+        input: text.substring(0, 8000),
+        encoding_format: "float",
+      }),
+    })
+    if (!res.ok) {
+      console.error(`[${requestId}] embedding API error: ${res.status} ${await res.text()}`)
+      return null
+    }
+    const data = await res.json()
+    return (data.data?.[0]?.embedding ?? null) as number[] | null
+  } catch (err) {
+    console.error(`[${requestId}] embedding exception:`, err)
+    return null
+  }
+}
+
+async function storeTrainingItemEmbedding(
+  admin: ReturnType<typeof createClient>,
+  userId: string,
+  trainingItemId: string,
+  content: string,
+  requestId: string,
+): Promise<void> {
+  const embedding = await generateEmbedding(content, requestId)
+  if (!embedding) return
+  const vectorStr = `[${embedding.join(",")}]`
+  const { error } = await admin.rpc("zc_update_training_item_embedding", {
+    p_user_id:          userId,
+    p_training_item_id: trainingItemId,
+    p_embedding:        vectorStr,
+  })
+  if (error) {
+    console.error(`[${requestId}] store embedding error:`, error.message)
+  } else {
+    console.log(`[${requestId}] embedding stored for item ${trainingItemId.substring(0, 8)}`)
+  }
+}
+
 // --- Agent handlers ---
+
+async function handleListConversations(
+  admin: ReturnType<typeof createClient>,
+  userId: string,
+  params: Record<string, unknown>,
+  requestId: string,
+) {
+  const agentId = params.agentId as string
+  if (!agentId) return errorResponse("agentId obrigatorio", requestId, 400)
+  const { data, error } = await admin.rpc("zc_list_agent_conversations", {
+    p_user_id: userId,
+    p_agent_id: agentId,
+    p_limit: 50,
+  })
+  if (error) return errorResponse(error.message, requestId, 500)
+  return jsonResponse({ conversations: data ?? [] })
+}
+
+async function handleDeleteConversation(
+  admin: ReturnType<typeof createClient>,
+  userId: string,
+  params: Record<string, unknown>,
+  requestId: string,
+) {
+  const conversationId = params.conversationId as string
+  if (!conversationId) return errorResponse("conversationId obrigatorio", requestId, 400)
+  const { error } = await admin.rpc("zc_delete_conversation", {
+    p_user_id:         userId,
+    p_conversation_id: conversationId,
+  })
+  if (error) return errorResponse(error.message, requestId, 500)
+  return jsonResponse({ success: true })
+}
+
+async function handleDashboardStats(
+  admin: ReturnType<typeof createClient>,
+  userId: string,
+  requestId: string,
+) {
+  const { data, error } = await admin.rpc("zc_get_dashboard_stats", { p_user_id: userId })
+  if (error) return errorResponse(error.message, requestId, 500)
+  return jsonResponse(data ?? { conversation_count: 0, catalog_count: 0 })
+}
 
 async function handleListAgents(
   admin: ReturnType<typeof createClient>,
@@ -997,6 +1371,7 @@ async function handleUpdateAgent(
   if (params.timezone !== undefined) rpcParams.p_timezone = params.timezone
   if (params.responseTime !== undefined) rpcParams.p_response_time = params.responseTime
   if (params.interactionLimit !== undefined) rpcParams.p_interaction_limit = params.interactionLimit
+  if (params.aiModel !== undefined) rpcParams.p_ai_model = params.aiModel
 
   const { data, error } = await withTimeoutServer(
     admin.rpc("zc_update_agent", rpcParams),
@@ -1123,8 +1498,9 @@ async function handleCreateTrainingItem(
     p_char_count: charCount,
   })
 
-  // 4) Recompile system prompt if extraction succeeded
+  // 4) Generate embedding + recompile system prompt if extraction succeeded
   if (processingStatus === "done") {
+    await storeTrainingItemEmbedding(admin, userId, data.id, extractedContent, requestId)
     await recompileSystemPrompt(admin, userId, agentId, requestId)
   }
 
@@ -1226,6 +1602,7 @@ async function handleReprocessTrainingItem(
   })
 
   if (processingStatus === "done") {
+    await storeTrainingItemEmbedding(admin, userId, trainingItemId, extractedContent, requestId)
     await recompileSystemPrompt(admin, userId, agentId, requestId)
   }
 
@@ -1244,6 +1621,298 @@ async function handleCompilePrompt(
   const agentId = params.agentId as string
   await recompileSystemPrompt(admin, userId, agentId, requestId)
   return jsonResponse({ success: true })
+}
+
+// --- WhatsApp incoming message handler (called without user auth) ---
+
+function parseResponseTimeMs(val: string | undefined): number {
+  if (!val || val === "instant") return 0
+  const match = val.match(/^(\d+)s?$/)
+  return match ? parseInt(match[1], 10) * 1000 : 0
+}
+
+async function sendWhatsAppText(
+  instanceToken: string,
+  to: string,
+  text: string,
+  requestId: string,
+) {
+  // Strip WhatsApp suffix — uazapiGO /send/text expects plain number
+  const number = to.replace(/@s\.whatsapp\.net$/, "").replace(/@c\.us$/, "").replace(/@lid$/, "")
+  console.log(`[${requestId}] sendWhatsAppText to=${number} chars=${text.length}`)
+  try {
+    const res = await fetch(`${UAZAPI_BASE_URL}/send/text`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "token": instanceToken },
+      body: JSON.stringify({ number, text }),
+    })
+    const resBody = await res.text()
+    if (!res.ok) {
+      console.error(`[${requestId}] sendWhatsAppText failed: ${res.status} ${resBody}`)
+    } else {
+      console.log(`[${requestId}] sendWhatsAppText ok: ${resBody.substring(0, 120)}`)
+    }
+  } catch (err) {
+    console.error(`[${requestId}] sendWhatsAppText error:`, err)
+  }
+}
+
+async function handleIncomingWhatsApp(
+  admin: ReturnType<typeof createClient>,
+  payload: Record<string, unknown>,
+  requestId: string,
+): Promise<Response> {
+  console.log(`[${requestId}] WH keys=${Object.keys(payload).join(",")} type=${payload.type ?? payload.EventType ?? payload.event ?? "(none)"}`)
+
+  // ── Step 1: Parse payload ──────────────────────────────────────────────────
+  // uazapiGO flat format (actual): { token, owner, instanceName, EventType, chat, chatSource, BaseUrl, message: { messageType, text, fromMe, sender, chatid, owner, ... } }
+  // uazapiGO nested format (old):  { Token, type, body: { message: { ... } } }
+  // Legacy format:                 { token, event, data: { key: { fromMe, remoteJid }, message: { conversation } } }
+
+  let chatid = ""         // the JID to reply to (e.g. 5511999@s.whatsapp.net)
+  let messageText = ""    // extracted plain text
+  let ownerPhone = ""     // instance owner phone for fallback lookup
+  let senderName = ""     // display name of the contact
+  let instanceToken = (payload.token ?? payload.Token ?? payload.instance_token) as string | undefined
+
+  // Accept owner phone from root level (flat format)
+  const rootOwner = String(payload.owner ?? "").replace(/\D/g, "")
+
+  // Resolve message object: flat root > nested body.message
+  const bodyObj  = payload.body as Record<string, unknown> | undefined
+  const uazMsg   = (payload.message as Record<string, unknown> | undefined)
+                ?? (bodyObj?.message as Record<string, unknown> | undefined)
+
+  if (uazMsg) {
+    // ── uazapiGO format (flat or nested body) ──
+    console.log(`[${requestId}] WH msg keys=${Object.keys(uazMsg).join(",")}`)
+    const msgType = String(uazMsg.messageType ?? uazMsg.type ?? "")
+
+    if (uazMsg.fromMe === true) {
+      console.log(`[${requestId}] WH fromMe=true, skip`)
+      return jsonResponse({ ok: true })
+    }
+
+    // Skip known non-text types; allow empty/unknown msgType (proceed and extract text)
+    const TEXT_TYPES = ["Conversation", "ExtendedTextMessage", "conversation", "extendedTextMessage", "text", ""]
+    if (msgType && !TEXT_TYPES.includes(msgType)) {
+      console.log(`[${requestId}] WH msgType="${msgType}" not text, skip`)
+      return jsonResponse({ ok: true })
+    }
+
+    // chatid: try message fields first, then root payload.chat
+    chatid      = String(uazMsg.chatid ?? uazMsg.sender ?? payload.chat ?? "")
+    // text: may be in message.text, message.body, or message.content
+    messageText = String(uazMsg.text ?? uazMsg.body ?? uazMsg.content ?? "").trim()
+    // ownerPhone: prefer message.owner, fallback to root payload.owner
+    ownerPhone  = String(uazMsg.owner ?? "").replace(/\D/g, "") || rootOwner
+    // senderName: display name of the contact who sent the message
+    senderName  = String(uazMsg.senderName ?? uazMsg.pushName ?? "").trim()
+
+    if (chatid.includes("@g.us")) {
+      console.log(`[${requestId}] WH group message, skip`)
+      return jsonResponse({ ok: true })
+    }
+    if (!messageText) {
+      console.log(`[${requestId}] WH empty text (msgType="${msgType}"), skip`)
+      return jsonResponse({ ok: true })
+    }
+
+  } else {
+    // ── Legacy UAZAPI format ──
+    const dataItem = (payload.data ?? (payload.messages as unknown[])?.[0]) as Record<string, unknown> | undefined
+    if (!dataItem) {
+      console.log(`[${requestId}] WH unknown payload — no message, body.message, or data field`)
+      return jsonResponse({ ok: true })
+    }
+
+    const key = (dataItem.key ?? {}) as Record<string, unknown>
+    if (key.fromMe === true) {
+      console.log(`[${requestId}] WH fromMe=true (legacy), skip`)
+      return jsonResponse({ ok: true })
+    }
+
+    chatid = String(key.remoteJid ?? "")
+    if (!chatid || chatid.includes("@g.us")) {
+      console.log(`[${requestId}] WH remoteJid=${chatid} (group/empty), skip`)
+      return jsonResponse({ ok: true })
+    }
+
+    const msgObj  = (dataItem.message ?? {}) as Record<string, unknown>
+    const extText = (msgObj.extendedTextMessage as Record<string, unknown> | undefined)?.text as string | undefined
+    messageText   = ((msgObj.conversation as string | undefined) ?? extText ?? "").trim()
+
+    if (!messageText) {
+      console.log(`[${requestId}] WH empty text (legacy), skip`)
+      return jsonResponse({ ok: true })
+    }
+  }
+
+  console.log(`[${requestId}] WH chatid=${chatid} text="${messageText.substring(0, 50)}" token=${instanceToken?.substring(0, 8) ?? "MISSING"} owner=${ownerPhone || "(none)"}`)
+
+  // ── Step 2: Identify the WhatsApp instance + active agent ─────────────────
+  // Primary:  token from payload (requires sendToken: true in webhook config)
+  // Fallback: owner phone stored in integrations_whatsapp.phone_number
+
+  let agentRow: Record<string, unknown> | null = null
+  let resolvedInstanceToken: string | undefined = instanceToken
+
+  if (instanceToken) {
+    const { data, error } = await admin.rpc("zc_get_agent_by_instance_token", {
+      p_instance_token: instanceToken,
+    })
+    if (!error && data) {
+      agentRow = data as Record<string, unknown>
+    } else {
+      console.log(`[${requestId}] WH token lookup miss: ${error?.message ?? "no data"}`)
+    }
+  }
+
+  if (!agentRow && ownerPhone) {
+    console.log(`[${requestId}] WH fallback — owner phone lookup: ${ownerPhone}`)
+    const { data, error } = await admin.rpc("zc_get_agent_by_owner_phone", {
+      p_owner_phone: ownerPhone,
+    })
+    if (!error && data) {
+      agentRow = data as Record<string, unknown>
+      resolvedInstanceToken = (agentRow.instance_token as string | undefined) ?? resolvedInstanceToken
+    } else {
+      console.log(`[${requestId}] WH owner lookup miss: ${error?.message ?? "no data"}`)
+    }
+  }
+
+  if (!agentRow) {
+    console.log(`[${requestId}] WH no agent found — giving up`)
+    return jsonResponse({ ok: true })
+  }
+
+  const resolvedUserId = agentRow.resolved_user_id as string
+  const agentId        = agentRow.id as string
+
+  console.log(`[${requestId}] WH agent=${agentId.substring(0, 8)} user=${resolvedUserId?.substring(0, 8)}`)
+
+  if (!resolvedInstanceToken) {
+    console.log(`[${requestId}] WH no instance token to reply with, skip`)
+    return jsonResponse({ ok: true })
+  }
+
+  // ── Step 3: RAG — embed query + retrieve relevant context ─────────────────
+  let contextItems: TrainingContentItem[] = []
+
+  const queryEmbedding = await generateEmbedding(messageText, requestId)
+  if (queryEmbedding) {
+    const { data: ragItems } = await admin.rpc("zc_search_training_content", {
+      p_user_id:         resolvedUserId,
+      p_agent_id:        agentId,
+      p_query_embedding: `[${queryEmbedding.join(",")}]`,
+      p_match_count:     6,
+      p_min_similarity:  0.25,
+    })
+    if (ragItems && (ragItems as TrainingContentItem[]).length > 0) {
+      contextItems = ragItems as TrainingContentItem[]
+      console.log(`[${requestId}] RAG: ${contextItems.length} relevant chunks (top sim=${(contextItems[0] as unknown as Record<string,unknown>).similarity ?? "?"})`)
+    }
+  }
+
+  // Fallback: use all training items when embeddings not yet generated
+  if (contextItems.length === 0) {
+    const { data: allItems } = await admin.rpc("zc_get_all_training_content", {
+      p_user_id:  resolvedUserId,
+      p_agent_id: agentId,
+    })
+    contextItems = (allItems ?? []) as TrainingContentItem[]
+    console.log(`[${requestId}] RAG fallback: using all ${contextItems.length} training items`)
+  }
+
+  const systemPrompt = compileSystemPrompt(
+    agentRow as unknown as AgentForPrompt,
+    contextItems,
+  )
+  console.log(`[${requestId}] WH prompt compiled: ${systemPrompt.length} chars, ${contextItems.length} context items`)
+
+  // ── Step 4: Conversation history ──────────────────────────────────────────
+  const contactPhone = chatid
+    .replace(/@s\.whatsapp\.net$/, "")
+    .replace(/@c\.us$/, "")
+    .replace(/@lid$/, "")
+
+  const { data: convData } = await admin.rpc("zc_get_conversation", {
+    p_user_id: resolvedUserId,
+    p_agent_id: agentId,
+    p_contact_phone: contactPhone,
+  })
+  const history = ((convData?.messages ?? []) as Array<{ role: string; content: string }>).slice(-10)
+
+  // Inject contact name as context if available
+  const contactCtx = senderName
+    ? `\n\n## Contato atual\nNome: ${senderName}`
+    : ""
+  const finalSystemPrompt = systemPrompt + contactCtx
+
+  // ── Step 5: Apply response_time delay ─────────────────────────────────────
+  const delayMs = parseResponseTimeMs(agentRow.response_time as string | undefined)
+  if (delayMs > 0) {
+    console.log(`[${requestId}] WH response_time delay: ${delayMs}ms`)
+    await new Promise((r) => setTimeout(r, delayMs))
+  }
+
+  // ── Step 6: OpenAI ────────────────────────────────────────────────────────
+  const aiModel = (agentRow.ai_model as string | undefined) || "gpt-4o-mini"
+  const aiRes = await fetch("https://api.openai.com/v1/chat/completions", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${OPENAI_API_KEY}` },
+    body: JSON.stringify({
+      model: aiModel,
+      messages: [
+        { role: "system", content: finalSystemPrompt },
+        ...history,
+        { role: "user", content: messageText },
+      ],
+      max_tokens: 800,
+      temperature: 0.65,
+    }),
+  })
+
+  if (!aiRes.ok) {
+    console.error(`[${requestId}] OpenAI error: ${aiRes.status} ${await aiRes.text()}`)
+    return jsonResponse({ ok: true })
+  }
+
+  const aiData    = await aiRes.json()
+  const replyText = (aiData.choices?.[0]?.message?.content as string | undefined)?.trim() ?? ""
+  console.log(`[${requestId}] AI reply (${replyText.length} chars): "${replyText.substring(0, 80)}"`)
+  if (!replyText) return jsonResponse({ ok: true })
+
+  // ── Step 7: Send reply (split into parts if split_responses is on) ─────────
+  const splitResponses = agentRow.split_responses as boolean | undefined
+  if (splitResponses && replyText.includes("\n\n")) {
+    const parts = replyText.split(/\n\n+/).map((p) => p.trim()).filter(Boolean)
+    console.log(`[${requestId}] WH split_responses: ${parts.length} parts`)
+    for (let i = 0; i < parts.length; i++) {
+      await sendWhatsAppText(resolvedInstanceToken, chatid, parts[i], requestId)
+      if (i < parts.length - 1) {
+        await new Promise((r) => setTimeout(r, 600))
+      }
+    }
+  } else {
+    await sendWhatsAppText(resolvedInstanceToken, chatid, replyText, requestId)
+  }
+
+  // ── Step 8: Persist conversation history ──────────────────────────────────
+  const updatedHistory = [
+    ...history,
+    { role: "user",      content: messageText },
+    { role: "assistant", content: replyText   },
+  ]
+  await admin.rpc("zc_upsert_conversation", {
+    p_user_id:       resolvedUserId,
+    p_agent_id:      agentId,
+    p_contact_phone: contactPhone,
+    p_messages:      updatedHistory,
+  })
+
+  console.log(`[${requestId}] replied to ${contactPhone} via agent ${agentId.substring(0, 8)} (${replyText.length} chars, split=${!!splitResponses})`)
+  return jsonResponse({ ok: true })
 }
 
 // --- Main handler ---
@@ -1274,6 +1943,24 @@ Deno.serve(async (req) => {
     console.log(`[${requestId}] parse_json_ms=${now() - parseStart}`)
 
     const { action, ...params } = body
+
+    // ── UAZAPI incoming webhook (unauthenticated) ──
+    // Primary signal: no Authorization header + no action = webhook
+    // (Authenticated calls always send Authorization; UAZAPI webhooks never do)
+    const userAgent = req.headers.get("user-agent") ?? ""
+    const hasAuthHeader = !!req.headers.get("authorization")
+    const isWebhook = !action && (
+      !hasAuthHeader ||
+      userAgent.toLowerCase().includes("webhook") ||
+      userAgent.toLowerCase().includes("uazapi") ||
+      !!body.event ||
+      !!body.type
+    )
+    if (isWebhook) {
+      console.log(`[${requestId}] webhook detected ua="${userAgent}" hasAuth=${hasAuthHeader} type=${body.type ?? body.event ?? "(none)"}`)
+      const webhookAdmin = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
+      return await handleIncomingWhatsApp(webhookAdmin, body, requestId)
+    }
 
     if (action === "ping" || action === "health") {
       return await handlePing(requestId, startMs)
@@ -1324,7 +2011,7 @@ Deno.serve(async (req) => {
       case "status":
         return await handleStatus(admin, user.id)
       case "webhook":
-        return await handleWebhook(admin, user.id, params)
+        return await handleWebhook(admin, user.id, params, requestId)
       case "disconnect":
         return await handleDisconnect(admin, user.id)
       case "delete":
@@ -1335,6 +2022,14 @@ Deno.serve(async (req) => {
         return await handleMeliDisconnect(admin, user.id)
       case "meli-items":
         return await handleMeliItems(admin, user.id, params, requestId)
+      case "meli-sync-catalog":
+        return await handleMeliSyncCatalog(admin, user.id, params, requestId)
+      case "list-conversations":
+        return await handleListConversations(admin, user.id, params, requestId)
+      case "delete-conversation":
+        return await handleDeleteConversation(admin, user.id, params, requestId)
+      case "dashboard-stats":
+        return await handleDashboardStats(admin, user.id, requestId)
       case "list-agents":
         return await handleListAgents(admin, user.id, requestId, log)
       case "get-agent":

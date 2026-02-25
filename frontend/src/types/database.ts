@@ -11,6 +11,7 @@ export interface WhatsAppIntegration {
   webhook_url: string | null
   webhook_enabled: boolean
   is_connected: boolean
+  phone_number: string | null
   last_status_check: string | null
   created_at: string
   updated_at: string

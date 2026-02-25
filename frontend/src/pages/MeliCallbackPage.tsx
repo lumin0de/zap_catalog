@@ -46,7 +46,7 @@ export default function MeliCallbackPage() {
         await callEdgeFunction("meli-exchange", { code })
         await refreshIntegrations()
         setStatus("success")
-        setTimeout(() => navigate("/app/settings?tab=meli", { replace: true }), 2000)
+        setTimeout(() => navigate("/app/integrations?tab=meli", { replace: true }), 2000)
       } catch (err) {
         setStatus("error")
         setErrorMsg(err instanceof Error ? err.message : "Erro ao conectar com o Mercado Livre")
@@ -71,7 +71,7 @@ export default function MeliCallbackPage() {
       <div className="flex min-h-[60vh] flex-col items-center justify-center gap-4">
         <CheckCircle2 className="h-12 w-12 text-primary" />
         <p className="text-lg font-semibold">Mercado Livre conectado!</p>
-        <p className="text-sm text-muted-foreground">Redirecionando para configurações...</p>
+        <p className="text-sm text-muted-foreground">Redirecionando para integrações...</p>
       </div>
     )
   }
@@ -81,8 +81,8 @@ export default function MeliCallbackPage() {
       <AlertCircle className="h-12 w-12 text-destructive" />
       <p className="text-lg font-semibold">Erro ao conectar</p>
       <p className="text-sm text-muted-foreground">{errorMsg}</p>
-      <Button onClick={() => navigate("/app/settings?tab=meli", { replace: true })}>
-        Voltar para configurações
+      <Button onClick={() => navigate("/app/integrations?tab=meli", { replace: true })}>
+        Voltar para integrações
       </Button>
     </div>
   )

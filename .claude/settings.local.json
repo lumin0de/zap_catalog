@@ -28,7 +28,24 @@
       "Bash(npx vite build)",
       "Bash(grep:*)",
       "Bash(find:*)",
-      "Bash(git show:*)"
+      "Bash(git show:*)",
+      "Bash(cd /c/Luminode/zapcatalog/supabase/migrations && mv 20260213_create_agents.sql 20260213100_create_agents.sql && mv 20260213_add_knowledge_base.sql 20260213200_add_knowledge_base.sql && mv 20260213_add_document_upload.sql 20260213300_add_document_upload.sql && ls -la 2>&1)",
+      "WebFetch(domain:luminode.uazapi.com)",
+      "WebFetch(domain:www.npmjs.com)",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:uazapi.dev)",
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "WebFetch(domain:bubble.io)",
+      "WebFetch(domain:n8ntools.io)",
+      "WebFetch(domain:wozzapi.com)",
+      "Bash(head:*)",
+      "Bash(# The docs site is a SPA - try to get the JS bundle to find the openapi spec URL\ncurl -s \"https://docs.uazapi.com/assets/index-BgPOnyqJ.js\" 2>/dev/null | grep -o '\"https://[^\"]*\\\\.json[^\"]*\"' | head -10 || echo \"no json urls found\"\n# Also check if there's a yaml spec somewhere\ncurl -s \"https://docs.uazapi.com/assets/index-BgPOnyqJ.js\" 2>/dev/null | grep -o '\"https://[^\"]*\\\\.yaml[^\"]*\"' | head -10 || echo \"no yaml urls found\")",
+      "Bash(cd \"C:/Luminode/zapcatalog\" && supabase functions deploy uazapi-proxy --no-verify-jwt 2>&1)",
+      "Bash(cd \"C:/Luminode/zapcatalog\" && supabase db push --include-all 2>&1)",
+      "Bash(cd \"C:/Luminode/zapcatalog\" && supabase migration repair --status reverted 20260224 20260225 2>&1 && supabase db push --include-all 2>&1)",
+      "Bash(cd \"C:/Luminode/zapcatalog\" && supabase migration repair --status reverted 20260224 20260225 2>&1 | tail -3 && supabase db push --include-all 2>&1)",
+      "Bash(tail:*)",
+      "Bash(cd /c/Luminode/zapcatalog && supabase migration repair --status reverted 20260224 20260225 2>&1)"
     ],
     "defaultMode": "acceptEdits"
   }
