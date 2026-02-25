@@ -746,9 +746,18 @@ async function handleMeliSyncCatalog(
   console.log(`[${requestId}] meli-sync seller_id=${seller_id}`)
 
   // Fetch all items (up to 200), filter by status client-side
+  interface CatalogVariation {
+    id: number
+    price: number
+    available_quantity: number
+    combinations: Array<{ name: string; value: string }>
+  }
   interface CatalogItem {
-    id: string; title: string; price: number; currency_id: string
-    available_quantity: number; permalink: string | null; status: string
+    id: string; title: string; price: number; original_price: number | null
+    currency_id: string; available_quantity: number; permalink: string | null
+    status: string; condition: string; warranty: string | null
+    free_shipping: boolean; attributes: Record<string, string>
+    variations: CatalogVariation[]
   }
   const allItems: CatalogItem[] = []
   let fetchOffset = 0
@@ -791,15 +800,53 @@ async function handleMeliSyncCatalog(
           console.log(`[${requestId}] meli-sync item=${b.id} status=${b.status}`)
           // Include all non-deleted items so agent knows full catalog
           if (b.status !== "deleted") {
-            // Extract useful attributes (color, size, brand, etc.)
-          const attrMap: Record<string, string> = {}
-          const USEFUL_ATTRS = ["COLOR", "SIZE", "BRAND", "MATERIAL", "GENDER", "AGE_GROUP", "MODEL"]
-          for (const attr of (b.attributes ?? []) as Array<{ id: string; value_name: string | null }>) {
-            if (USEFUL_ATTRS.includes(attr.id) && attr.value_name) {
-              attrMap[attr.id] = attr.value_name
+            // Capture ALL attributes that have a real value
+            const attrMap: Record<string, string> = {}
+            const SKIP_ATTR_IDS = new Set(["ITEM_CONDITION", "ALPHANUMERIC_MODEL", "MPN", "EAN", "GTIN", "SKU"])
+            for (const attr of (b.attributes ?? []) as Array<{ id: string; name: string; value_name: string | null }>) {
+              if (
+                attr.value_name &&
+                attr.value_name !== "Não informado" &&
+                attr.value_name !== "Não definido" &&
+                attr.value_name !== "Not defined" &&
+                !SKIP_ATTR_IDS.has(attr.id)
+              ) {
+                attrMap[attr.name ?? attr.id] = attr.value_name
+              }
             }
-          }
-          allItems.push({ id: b.id, title: b.title, price: b.price, currency_id: b.currency_id, available_quantity: b.available_quantity, permalink: b.permalink, status: b.status, attributes: attrMap })
+
+            // Capture variations (size/color variants with individual price and stock)
+            const variations: CatalogVariation[] = []
+            for (const v of (b.variations ?? []) as Array<{
+              id: number; price: number; available_quantity: number
+              attribute_combinations: Array<{ name: string; value_name: string }>
+            }>) {
+              variations.push({
+                id: v.id,
+                price: v.price,
+                available_quantity: v.available_quantity,
+                combinations: (v.attribute_combinations ?? []).map((c) => ({
+                  name: c.name,
+                  value: c.value_name,
+                })),
+              })
+            }
+
+            allItems.push({
+              id: b.id,
+              title: b.title,
+              price: b.price,
+              original_price: b.original_price ?? null,
+              currency_id: b.currency_id,
+              available_quantity: b.available_quantity,
+              permalink: b.permalink,
+              status: b.status,
+              condition: b.condition ?? "new",
+              warranty: b.warranty ?? null,
+              free_shipping: b.shipping?.free_shipping === true,
+              attributes: attrMap,
+              variations,
+            })
           }
         }
       }
@@ -821,19 +868,36 @@ async function handleMeliSyncCatalog(
   // Build readable catalog text
   const syncDate = new Date().toLocaleDateString("pt-BR")
   const fmtBRL = (n: number) => new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" }).format(n)
+  const conditionLabel = (c: string) => c === "used" ? "Usado" : "Novo"
   let catalogText = `CATALOGO DE PRODUTOS - Atualizado em ${syncDate}\nTotal de produtos: ${allItems.length}\n\n`
-  const ATTR_LABELS: Record<string, string> = {
-    COLOR: "Cor", SIZE: "Tamanho", BRAND: "Marca", MATERIAL: "Material",
-    GENDER: "Genero", AGE_GROUP: "Faixa etaria", MODEL: "Modelo",
-  }
+
   for (const item of allItems) {
-    catalogText += `---\nProduto: ${item.title}\nPreco: ${fmtBRL(item.price)}\n`
-    const attrs = item.attributes as Record<string, string> | undefined
-    if (attrs) {
-      for (const [key, val] of Object.entries(attrs)) {
-        catalogText += `${ATTR_LABELS[key] ?? key}: ${val}\n`
+    catalogText += `---\nProduto: ${item.title}\n`
+    catalogText += `Preco: ${fmtBRL(item.price)}`
+    if (item.original_price && item.original_price > item.price) {
+      catalogText += ` (de ${fmtBRL(item.original_price)})`
+    }
+    catalogText += "\n"
+    catalogText += `Condicao: ${conditionLabel(item.condition)}\n`
+    catalogText += `Frete gratis: ${item.free_shipping ? "Sim" : "Nao"}\n`
+    if (item.warranty) catalogText += `Garantia: ${item.warranty}\n`
+
+    // All technical attributes
+    if (Object.keys(item.attributes).length > 0) {
+      for (const [name, val] of Object.entries(item.attributes)) {
+        catalogText += `${name}: ${val}\n`
       }
     }
+
+    // Variations (size/color combos with individual price and stock)
+    if (item.variations.length > 0) {
+      catalogText += "Variacoes disponíveis:\n"
+      for (const v of item.variations) {
+        const combos = v.combinations.map((c) => `${c.name}: ${c.value}`).join(", ")
+        catalogText += `  - ${combos} | Preco: ${fmtBRL(v.price)} | Estoque: ${v.available_quantity}\n`
+      }
+    }
+
     if (item.permalink) catalogText += `Link: ${item.permalink}\n`
     catalogText += "\n"
   }

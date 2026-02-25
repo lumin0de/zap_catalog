@@ -45,7 +45,8 @@
       "Bash(cd \"C:/Luminode/zapcatalog\" && supabase migration repair --status reverted 20260224 20260225 2>&1 && supabase db push --include-all 2>&1)",
       "Bash(cd \"C:/Luminode/zapcatalog\" && supabase migration repair --status reverted 20260224 20260225 2>&1 | tail -3 && supabase db push --include-all 2>&1)",
       "Bash(tail:*)",
-      "Bash(cd /c/Luminode/zapcatalog && supabase migration repair --status reverted 20260224 20260225 2>&1)"
+      "Bash(cd /c/Luminode/zapcatalog && supabase migration repair --status reverted 20260224 20260225 2>&1)",
+      "Bash(supabase:*)"
     ],
     "defaultMode": "acceptEdits"
   }

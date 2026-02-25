@@ -2,7 +2,7 @@ import { useState } from "react"
 import { callEdgeFunction } from "@/lib/api"
 import { useAuth } from "@/contexts/AuthContext"
 import { Button } from "@/components/ui/button"
-import { Loader2, MessageSquare } from "lucide-react"
+import { Loader2, MessageSquare, TriangleAlert } from "lucide-react"
 import { toast } from "sonner"
 
 interface StepCreateInstanceProps {
@@ -38,6 +38,23 @@ export function StepCreateInstance({ onNext }: StepCreateInstanceProps) {
           segundos.
         </p>
       </div>
+
+      <div className="w-full rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-left dark:border-amber-800 dark:bg-amber-950/30">
+        <div className="flex gap-2">
+          <TriangleAlert className="mt-0.5 h-4 w-4 shrink-0 text-amber-600 dark:text-amber-400" />
+          <div className="space-y-1">
+            <p className="text-sm font-medium text-amber-800 dark:text-amber-300">
+              Use um número exclusivo para o bot
+            </p>
+            <p className="text-xs text-amber-700 dark:text-amber-400">
+              A partir da conexão, <strong>todas as mensagens recebidas</strong> por esse número serão
+              respondidas automaticamente pelo agente. Recomendamos conectar um número novo, sem histórico
+              de conversas, dedicado exclusivamente ao atendimento via bot.
+            </p>
+          </div>
+        </div>
+      </div>
+
       <Button onClick={handleCreate} disabled={loading} className="w-full max-w-xs">
         {loading ? (
           <Loader2 className="mr-2 h-4 w-4 animate-spin" />

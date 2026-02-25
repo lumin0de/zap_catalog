@@ -1,0 +1,4 @@
+project_id = "pzwefecmqkktcybeuohm"
+
+[functions.uazapi-proxy]
+verify_jwt = false
